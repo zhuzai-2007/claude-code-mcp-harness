@@ -6,6 +6,7 @@ mcp-server/*.bak*
 mcp-server/*.working-v0.1
 mcp-server/.server-test.*.log
 .agents/runs/
+.agents/local.config.json
 .agent-runs/
 outbox/
 logs/

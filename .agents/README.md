@@ -26,6 +26,29 @@ Normalized result fields are stable: `status`, `mode`, `summary`, `files_read`, 
 
 Exit codes: `0=success`, `1=worker_failed`, `2=policy_blocked`, `3=invalid_input`, `4=environment_failed`.
 
+## Budget
+
+Default Claude worker budget is `0.10` USD per run. This default is intentionally conservative.
+
+For real small tasks that need more room, use a temporary explicit budget:
+
+```powershell
+.\.agents\claude-task.ps1 plan -Task "Return exactly OK and nothing else." -MaxBudgetUsd 0.20
+.\.agents\claude-task.ps1 run -Task "Make the approved change." -ApprovedBy Codex -ApprovalReason "User approved this worker run." -MaxBudgetUsd 0.30
+```
+
+The budget must be positive and cannot exceed `1.00`. Raising it can increase actual API cost, so use the smallest value that fits the task.
+
+Project-local defaults can be placed in `.agents/local.config.json`:
+
+```json
+{
+  "maxBudgetUsd": 0.20
+}
+```
+
+Do not commit `.agents/local.config.json`; command-line `-MaxBudgetUsd` takes precedence over local config.
+
 ## Safety model
 
 `run` mode requires `-ApprovedBy` and `-ApprovalReason`. Git writes, dependency installs, network access, recursive deletes, and external directories are blocked unless the matching allow switch and approval metadata are present. `plan` and `review` are read-only at the tool policy level.
@@ -61,7 +84,7 @@ Real Claude worker calls can time out. Timeouts are reported as `worker_failed` 
 Install this harness into another project with:
 
 ```powershell
-.\install.ps1 -TargetProject D:\some\project
+.\install.ps1 -TargetProject D:/path/to/your/project
 ```
 
 The installer copies portable `.agents` files, initializes `.agents\runs\.gitkeep` and `.agents\local.config.json`, and does not copy historical runs. Existing `policy.json` is preserved unless `-Force` is supplied.

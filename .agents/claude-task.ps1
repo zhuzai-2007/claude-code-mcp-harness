@@ -8,6 +8,7 @@ param(
     [string] $TaskFile,
     [string] $InputJson,
     [decimal] $BudgetUsd = -1,
+    [decimal] $MaxBudgetUsd = 0.10,
     [string] $Model,
     [string[]] $AllowDir = @(),
     [string[]] $ContextFiles = @(),
@@ -28,6 +29,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ExitCodes = @{ success = 0; worker_failed = 1; policy_blocked = 2; invalid_input = 3; environment_failed = 4 }
+$maxBudgetProvided = $PSBoundParameters.ContainsKey('MaxBudgetUsd')
+$budgetProvided = $PSBoundParameters.ContainsKey('BudgetUsd')
 
 function Resolve-FullPath {
     param([Parameter(Mandatory = $true)][string] $Path)
@@ -215,6 +218,11 @@ try {
     $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
     if (-not $policy.modes.$Mode) { throw "Mode '$Mode' is not configured in policy.json." }
     $modePolicy = $policy.modes.$Mode
+    $localConfig = $null
+    $localConfigPath = Join-Path $agentsRoot 'local.config.json'
+    if (Test-Path -LiteralPath $localConfigPath) {
+        $localConfig = Get-Content -LiteralPath $localConfigPath -Raw | ConvertFrom-Json
+    }
 
     if ($InputJson) {
         $inputPath = Resolve-FullPath $InputJson
@@ -223,7 +231,8 @@ try {
         $props = $input.PSObject.Properties
         if ($props['task']) { $Task = [string]$props['task'].Value }
         if ($props['taskFile']) { $TaskFile = [string]$props['taskFile'].Value }
-        if ($props['budgetUsd'] -and $BudgetUsd -lt 0) { $BudgetUsd = [decimal]$props['budgetUsd'].Value }
+        if ($props['budgetUsd'] -and -not $budgetProvided) { $BudgetUsd = [decimal]$props['budgetUsd'].Value; $budgetProvided = $true }
+        if ($props['maxBudgetUsd'] -and -not $maxBudgetProvided) { $MaxBudgetUsd = [decimal]$props['maxBudgetUsd'].Value; $maxBudgetProvided = $true }
         if ($props['model'] -and -not $Model) { $Model = [string]$props['model'].Value }
         if ($props['contextFiles']) { $ContextFiles = @($props['contextFiles'].Value) }
         if ($props['maxFilesRead']) { $MaxFilesRead = [int]$props['maxFilesRead'].Value }
@@ -242,7 +251,15 @@ try {
     }
 
     if (($Mode -eq 'plan' -or $Mode -eq 'review') -and -not (Test-ReadonlyTools -ModePolicy $modePolicy)) { throw "Policy error: mode '$Mode' includes write-capable tools." }
-    if ($BudgetUsd -lt 0) { $BudgetUsd = [decimal]$policy.defaultBudgetUsd }
+    if ((-not $maxBudgetProvided) -and $budgetProvided -and $BudgetUsd -ge 0) { $MaxBudgetUsd = $BudgetUsd; $maxBudgetProvided = $true }
+    if ((-not $maxBudgetProvided) -and $localConfig) {
+        $localProps = $localConfig.PSObject.Properties
+        if ($localProps['maxBudgetUsd']) { $MaxBudgetUsd = [decimal]$localProps['maxBudgetUsd'].Value }
+    }
+    if ((-not $maxBudgetProvided) -and (-not $localConfig) -and $policy.defaultBudgetUsd) { $MaxBudgetUsd = [decimal]$policy.defaultBudgetUsd }
+    if ($MaxBudgetUsd -le 0) { throw "MaxBudgetUsd must be a positive number." }
+    if ($MaxBudgetUsd -gt 1.00) { throw "MaxBudgetUsd must be less than or equal to 1.00. Refusing requested value: $MaxBudgetUsd" }
+    $BudgetUsd = $MaxBudgetUsd
     $effectiveBare = -not [bool]$NoBare
     if ($Bare) { $effectiveBare = $true }
 

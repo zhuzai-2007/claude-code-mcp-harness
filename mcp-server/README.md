@@ -107,7 +107,7 @@ Copy `config.example.json` to `config.json` and adjust it locally. Do not commit
 
 ```json
 {
-  "projectRoot": "D:/path/to/project",
+  "projectRoot": "D:/path/to/your/project",
   "workerTimeoutSeconds": 300,
   "defaultApprovedBy": "local-user",
   "defaultApprovalReason": "User explicitly approved this run through ChatGPT MCP.",
