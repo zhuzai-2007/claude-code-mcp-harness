@@ -1,0 +1,49 @@
+﻿{
+  "schemaVersion": 2,
+  "projectRoot": "<derived-from-.agents-directory>",
+  "defaultBudgetUsd": 0.10,
+  "defaults": {
+    "bare": true,
+    "maxFilesRead": 20,
+    "maxCommands": 8
+  },
+  "modes": {
+    "plan": {
+      "permissionMode": "plan",
+      "outputFormat": "json",
+      "allowedTools": ["Read", "Glob", "Grep", "LS"],
+      "mayModifyFiles": false
+    },
+    "run": {
+      "permissionMode": "default",
+      "outputFormat": "json",
+      "allowedTools": ["Read", "Glob", "Grep", "LS", "Edit", "MultiEdit", "Write"],
+      "mayModifyFiles": true,
+      "requiresApproval": true
+    },
+    "review": {
+      "permissionMode": "plan",
+      "outputFormat": "json",
+      "allowedTools": ["Read", "Glob", "Grep", "LS", "Bash(git status *)", "Bash(git diff *)"],
+      "mayModifyFiles": false
+    }
+  },
+  "safety": {
+    "denyDangerousPermissionBypass": true,
+    "denyProjectRootEscapeByDefault": true,
+    "denySecretsAndGlobalConfig": true,
+    "denyRecursiveDelete": true,
+    "denyGitCommitOrPush": true,
+    "denyNetworkAndDependencyInstallByDefault": true,
+    "redactEnvironmentValues": true
+  },
+  "approvalRequiredFor": [
+    "editing project files",
+    "running tests or build commands",
+    "creating artifacts",
+    "installing dependencies",
+    "network access",
+    "changing project configuration",
+    "adding directories outside the project root"
+  ]
+}

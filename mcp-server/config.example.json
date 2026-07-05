@@ -1,0 +1,16 @@
+{
+  "projectRoot": "D:/path/to/project",
+  "workerTimeoutSeconds": 300,
+  "defaultApprovedBy": "local-user",
+  "defaultApprovalReason": "User explicitly approved this run through ChatGPT MCP.",
+  "host": "127.0.0.1",
+  "port": 8787,
+  "stdoutLimit": 12000,
+  "stderrLimit": 12000,
+  "allowedOrigins": [
+    "https://chatgpt.com",
+    "https://chat.openai.com"
+  ],
+  "strictOriginCheck": false,
+  "requireAuth": false
+}

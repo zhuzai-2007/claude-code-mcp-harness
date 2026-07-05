@@ -1,0 +1,14 @@
+node_modules/
+mcp-server/node_modules/
+mcp-server/config.json
+mcp-server/*.bak*
+mcp-server/*.working-v0.1
+mcp-server/.server-test.*.log
+.agents/runs/
+.agent-runs/
+outbox/
+logs/
+.env*
+.claude/
+.claude.json
+settings.local.json
