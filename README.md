@@ -66,6 +66,12 @@ With the MCP bridge already running:
 
 This checks `/health`, `.agents/summary.ps1`, and a short read-only plan task.
 
+## ChatGPT Supervisor Protocol
+
+For ChatGPT web usage, the user can describe a high-level goal instead of manually writing MCP tool parameters. The default supervisor protocol is documented in [docs/supervisor-usage.md](docs/supervisor-usage.md).
+
+In short: small isolated tasks that only create files under a new `workspace/<new-dir>/` may be auto-run through `cc_run_approved_task`; core-file edits, existing project edits, dependency installs, networking, deletion, git operations, long tasks, or ambiguous write boundaries require a second user confirmation.
+
 ## Safety Boundary
 
 The MCP bridge is a Claude Code harness bridge, not a general shell or file server. It only calls the existing allowlisted harness scripts:
