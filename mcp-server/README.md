@@ -17,12 +17,24 @@ From `mcp-server/`:
 npm install
 ```
 
+From the project root, initialize local config without overwriting an existing `config.json`:
+
+```powershell
+.\scripts\init-config.ps1
+```
+
+Run local diagnostics:
+
+```powershell
+.\scripts\doctor.ps1
+```
+
 ## Start
 
 From the project root:
 
 ```powershell
-node .\mcp-server\server.mjs
+.\scripts\start-mcp.ps1
 ```
 
 From `mcp-server/`:
@@ -70,6 +82,12 @@ Recommended first tool sequence:
 Expose the local server:
 
 ```powershell
+.\scripts\start-ngrok.ps1
+```
+
+That script runs:
+
+```powershell
 ngrok http --host-header=127.0.0.1:8787 8787
 ```
 
@@ -108,6 +126,8 @@ If an HTTP `Origin` header is present, the bridge validates it. Localhost origin
 
 `requireAuth` may appear in local config files, but it is not implemented in v0.1 and does not provide real authentication. Do not rely on it as an access control boundary.
 
+There is no authentication layer in v0.1. Keep the bridge bound to `127.0.0.1` locally and treat any ngrok URL as a temporary public endpoint.
+
 The current implementation strips a UTF-8 BOM when reading JSON config/result files. This keeps PowerShell-edited JSON usable.
 
 ## Process I/O
@@ -115,6 +135,16 @@ The current implementation strips a UTF-8 BOM when reading JSON config/result fi
 `claude-task.ps1` is spawned with `stdio: inherit`. This is intentional: Claude Code can hang in a Node pipe environment in some auth, trust, permission, or terminal-interaction paths.
 
 `summary.ps1` still uses piped stdout/stderr so the bridge can capture summary output and return it through MCP.
+
+## Local Test
+
+With the MCP bridge already running:
+
+```powershell
+.\scripts\test-local.ps1
+```
+
+This checks `/health`, runs `summary.ps1 -RunId latest -IncludeIncomplete`, and performs one short read-only `plan` task through the existing harness.
 
 ## Safety Boundary
 
