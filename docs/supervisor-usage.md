@@ -20,6 +20,15 @@ workspace/<new-dir>/
 
 This default auto-run path is intended for low-risk artifact creation, demos, scratch outputs, and isolated prototypes.
 
+For workspace-isolated tasks, prefer one directory, few file reads, no network, no dependency installation, and no git operations.
+
+Example successful loop:
+
+1. User asks for a small study task planner utility.
+2. ChatGPT directs the worker to touch only `workspace/study-task-planner/`.
+3. ChatGPT later asks the worker only to add `workspace/study-task-planner/run_tests.py`.
+4. User runs `python run_tests.py` locally from that directory and reports the result.
+
 ## Required Worker Prompt Boundary
 
 When ChatGPT auto-generates the worker prompt for a default auto-run task, it must include explicit boundaries:
@@ -44,6 +53,26 @@ After every worker run, ChatGPT must call:
 2. `cc_get_result` with `runId = "latest"`
 
 ChatGPT should use the normalized result as the primary source of truth. If the normalized result reports failure, timeout, policy blocking, invalid input, or incomplete output, ChatGPT must report that state clearly instead of assuming success.
+
+## Budget Guidance
+
+For third-party or domestic-model adapters, `MaxBudgetUsd` is the Claude Code or wrapper-side estimated budget. It may not match the actual amount charged by the upstream API platform.
+
+For local use, prefer setting a project-local default in `.agents/local.config.json`, for example `maxBudgetUsd` around `1.00` for practical small tasks. That file is git ignored and must not be committed. The portable template currently rejects values above `5.00`. If your adapter is calibrated differently and you need a higher ceiling, that requires a local wrapper/policy change and should be treated as an operator decision because it can increase real cost.
+
+ChatGPT should avoid repeatedly raising the budget inside a live task. Cost control should not rely only on `MaxBudgetUsd`; it should also rely on task splitting, `WorkerTimeoutSeconds`, narrow file-read scope, no networking, no dependency installation, and no git operations. Split the task or ask the user to run a real local test first.
+
+## Live Worker Testing
+
+Do not use Codex or another patch agent to run live Claude worker tests as part of ordinary supervisor operation. Live worker tests should be run by the user in a real PowerShell terminal where Claude Code can use its normal terminal, auth, trust, and adapter environment.
+
+Recommended cycle:
+
+1. `generate` or `patch-only` worker run with a narrow write boundary.
+2. User runs local tests in PowerShell.
+3. If needed, start a separate fix run with the test failure summary.
+
+This avoids long compound worker runs and keeps each run easier to inspect.
 
 ## When To Ask For Second Confirmation
 

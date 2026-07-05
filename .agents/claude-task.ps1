@@ -258,7 +258,7 @@ try {
     }
     if ((-not $maxBudgetProvided) -and (-not $localConfig) -and $policy.defaultBudgetUsd) { $MaxBudgetUsd = [decimal]$policy.defaultBudgetUsd }
     if ($MaxBudgetUsd -le 0) { throw "MaxBudgetUsd must be a positive number." }
-    if ($MaxBudgetUsd -gt 1.00) { throw "MaxBudgetUsd must be less than or equal to 1.00. Refusing requested value: $MaxBudgetUsd" }
+    if ($MaxBudgetUsd -gt 5.00) { throw "MaxBudgetUsd must be less than or equal to 5.00. Refusing requested value: $MaxBudgetUsd" }
     $BudgetUsd = $MaxBudgetUsd
     $effectiveBare = -not [bool]$NoBare
     if ($Bare) { $effectiveBare = $true }

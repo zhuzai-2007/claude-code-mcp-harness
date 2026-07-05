@@ -30,6 +30,8 @@ Exit codes: `0=success`, `1=worker_failed`, `2=policy_blocked`, `3=invalid_input
 
 Default Claude worker budget is `0.10` USD per run. This default is intentionally conservative.
 
+`MaxBudgetUsd` is the Claude Code / wrapper-side estimated budget. With third-party or domestic-model adapters, it may not match the actual amount charged by the upstream API platform.
+
 For real small tasks that need more room, use a temporary explicit budget:
 
 ```powershell
@@ -37,17 +39,19 @@ For real small tasks that need more room, use a temporary explicit budget:
 .\.agents\claude-task.ps1 run -Task "Make the approved change." -ApprovedBy Codex -ApprovalReason "User approved this worker run." -MaxBudgetUsd 0.30
 ```
 
-The budget must be positive and cannot exceed `1.00`. Raising it can increase actual API cost, so use the smallest value that fits the task.
+The budget must be positive. The portable template currently rejects values above `5.00`. Raising it can increase actual API cost, so use the smallest value that fits the task.
 
 Project-local defaults can be placed in `.agents/local.config.json`:
 
 ```json
 {
-  "maxBudgetUsd": 0.20
+  "maxBudgetUsd": 1.00
 }
 ```
 
-Do not commit `.agents/local.config.json`; command-line `-MaxBudgetUsd` takes precedence over local config.
+Do not commit `.agents/local.config.json`; command-line `-MaxBudgetUsd` takes precedence over local config. If your adapter is calibrated differently and you need a higher ceiling, that requires a local wrapper/policy change and should be treated as an operator decision because it can increase real cost.
+
+Cost control should not rely only on `MaxBudgetUsd`. Keep tasks split, use appropriate `WorkerTimeoutSeconds`, bound file reads, and keep networking, dependency installation, git operations, and deletion disabled unless explicitly required and approved.
 
 ## Safety model
 

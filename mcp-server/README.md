@@ -43,20 +43,20 @@ From `mcp-server/`:
 node .\server.mjs
 ```
 
-Default bind address is `127.0.0.1:8787`.
+Default bind host and port are configured in `config.json`. The default local port is `8787`.
 
 ## Local Checks
 
 Health check:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8787/health
+Invoke-RestMethod http://<local-bind-host>:<local-port>/health
 ```
 
 The MCP endpoint is:
 
 ```text
-http://127.0.0.1:8787/mcp
+http://<local-bind-host>:<local-port>/mcp
 ```
 
 `/health` returns normal JSON. `/mcp` is MCP Streamable HTTP only. `GET /mcp` returns `405` and never returns fake health output.
@@ -85,11 +85,7 @@ Expose the local server:
 .\scripts\start-ngrok.ps1
 ```
 
-That script runs:
-
-```powershell
-ngrok http --host-header=127.0.0.1:8787 8787
-```
+The wrapper keeps the local host-header details inside `scripts/start-ngrok.ps1`.
 
 In ChatGPT MCP settings, use:
 
@@ -111,7 +107,7 @@ Copy `config.example.json` to `config.json` and adjust it locally. Do not commit
   "workerTimeoutSeconds": 300,
   "defaultApprovedBy": "local-user",
   "defaultApprovalReason": "User explicitly approved this run through ChatGPT MCP.",
-  "host": "127.0.0.1",
+  "host": "localhost",
   "port": 8787,
   "stdoutLimit": 12000,
   "stderrLimit": 12000,
@@ -126,7 +122,7 @@ If an HTTP `Origin` header is present, the bridge validates it. Localhost origin
 
 `requireAuth` may appear in local config files, but it is not implemented in v0.1 and does not provide real authentication. Do not rely on it as an access control boundary.
 
-There is no authentication layer in v0.1. Keep the bridge bound to `127.0.0.1` locally and treat any ngrok URL as a temporary public endpoint.
+There is no authentication layer in v0.1. Keep the bridge bound to a local interface and treat any ngrok URL as a temporary public endpoint.
 
 The current implementation strips a UTF-8 BOM when reading JSON config/result files. This keeps PowerShell-edited JSON usable.
 

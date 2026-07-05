@@ -42,11 +42,7 @@ In another terminal:
 .\scripts\start-ngrok.ps1
 ```
 
-The script runs:
-
-```powershell
-ngrok http --host-header=127.0.0.1:8787 8787
-```
+The wrapper keeps the local host-header details inside `scripts/start-ngrok.ps1`.
 
 Use this ChatGPT MCP URL format:
 
@@ -71,6 +67,8 @@ This checks `/health`, `.agents/summary.ps1`, and a short read-only plan task.
 For ChatGPT web usage, the user can describe a high-level goal instead of manually writing MCP tool parameters. The default supervisor protocol is documented in [docs/supervisor-usage.md](docs/supervisor-usage.md).
 
 In short: small isolated tasks that only create files under a new `workspace/<new-dir>/` may be auto-run through `cc_run_approved_task`; core-file edits, existing project edits, dependency installs, networking, deletion, git operations, long tasks, or ambiguous write boundaries require a second user confirmation.
+
+For third-party or domestic-model adapters, `MaxBudgetUsd` is an estimated Claude Code/wrapper budget and may not equal actual API billing. The default is conservative at `0.10`, and the portable wrapper rejects values above `5.00`. Set local defaults in `.agents/local.config.json`, for example `maxBudgetUsd` around `1.00`, and do not commit that file. Cost control should also rely on task splitting, `WorkerTimeoutSeconds`, narrow file scope, no networking, no dependency installation, and no git operations. Live worker tests should be run by the user in a real PowerShell terminal, not by Codex or another patch agent.
 
 ## Safety Boundary
 
