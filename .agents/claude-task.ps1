@@ -374,6 +374,13 @@ Required response shape:
     }
     if (-not $workerResult -and $parsed) { $workerResult = $parsed }
     if ($parseError -and $status -eq 'success') { $status = 'worker_failed' }
+    $subtype = Get-PropValue -Object $parsed -Name 'subtype'
+    if (-not $subtype) { $subtype = Get-PropValue -Object $workerResult -Name 'subtype' }
+    $isError = Get-PropValue -Object $parsed -Name 'is_error'
+    if ($null -eq $isError) { $isError = Get-PropValue -Object $workerResult -Name 'is_error' }
+    $claudeErrors = @(ConvertTo-Array (Get-PropValue -Object $parsed -Name 'errors'))
+    if ($claudeErrors.Count -eq 0) { $claudeErrors = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'errors')) }
+    if (($subtype -eq 'error_max_budget_usd') -or ($isError -eq $true) -or ([string]$isError -eq 'true')) { $status = 'worker_failed' }
     $summaryValue = Get-PropValue -Object $workerResult -Name 'summary'
     if (-not $summaryValue) { $summaryValue = Get-PropValue -Object $workerResult -Name 'result' }
     if (-not $summaryValue) { $summaryValue = Get-PropValue -Object $workerResult -Name 'response' }
@@ -386,7 +393,21 @@ Required response shape:
     $cost = Get-PropValue -Object $parsed -Name 'total_cost_usd'
     $stderrText = ''
     if (Test-Path -LiteralPath $stderrPath) { $stderrText = Get-Content -LiteralPath $stderrPath -Raw }
-    $err = if ($parseError) { @{ code = 'invalid_worker_json'; message = $parseError } } elseif ($status -ne 'success') { @{ code = 'claude_failed'; message = $stderrText } } else { $null }
+    $blockedOn = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'blocked_on'))
+    $err = if ($parseError) {
+        @{ code = 'invalid_worker_json'; message = $parseError }
+    } elseif ($status -ne 'success') {
+        $errorMessage = if ($claudeErrors.Count -gt 0) { [string]$claudeErrors[0] } elseif ($stderrText) { $stderrText } elseif ($subtype) { [string]$subtype } else { 'Claude worker failed.' }
+        if ($subtype -eq 'error_max_budget_usd') {
+            $summary = 'Claude worker reached maximum budget.'
+            if ($blockedOn -notcontains 'max_budget_usd') { $blockedOn += 'max_budget_usd' }
+            @{ code = 'max_budget_usd'; message = $errorMessage }
+        } elseif ($subtype -or $isError) {
+            @{ code = if ($subtype) { [string]$subtype } else { 'claude_failed' }; message = $errorMessage }
+        } else {
+            @{ code = 'claude_failed'; message = $errorMessage }
+        }
+    } else { $null }
 
     $normalized = New-NormalizedResult -Status $status -Mode $Mode -Summary $summary `
         -FilesRead @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'files_read')) `
@@ -394,7 +415,7 @@ Required response shape:
         -CommandsRun @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'commands_run')) `
         -TestsOrChecks @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'tests_or_checks')) `
         -Risks @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'risks')) `
-        -BlockedOn @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'blocked_on')) `
+        -BlockedOn $blockedOn `
         -Cost $cost -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_error = $stderrPath } -ErrorObject $err
     Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status $status -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath -ClaudeExitCode $claudeExitCode
 } catch {
