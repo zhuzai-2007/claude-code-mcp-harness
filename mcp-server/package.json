@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-worker-mcp-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha",
   "private": true,
   "type": "module",
   "description": "MCP Streamable HTTP bridge for the local Codex-Claude worker harness.",

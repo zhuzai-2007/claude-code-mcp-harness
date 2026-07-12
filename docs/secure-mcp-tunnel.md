@@ -91,6 +91,8 @@ In ChatGPT developer mode, create an app and choose **Tunnel** as the connection
 - `cc_get_latest_summary`
 - `cc_get_ledger`
 
+Long Worker calls can outlive the browser-side synchronous wait. Keep the returned run ID and call `cc_get_result` after reconnecting. The result includes the complete strict summary and event-derived audit fields when available. This is a manual recovery path; Phase B durable background orchestration and notifications are not implemented.
+
 Start with `cc_ping`, then a read-only `cc_plan_task`. Enable and test the write-capable action only after reviewing its input schema and confirmation behavior.
 
 ## Public tunnel fallback

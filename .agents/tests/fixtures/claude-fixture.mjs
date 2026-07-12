@@ -27,6 +27,9 @@ switch (scenario) {
     worker = { ...worker, summary: "denied check claimed", tests_or_checks: ["Read README.md"] };
     toolUse("read-denied", "Read", { file_path: "README.md" }); toolResult("read-denied", true);
     permissionDenials = [{ tool_use_id: "read-denied", tool_name: "Read", reason: "fixture denial" }]; break;
+  case "failed-tool-result":
+    worker = { ...worker, summary: "failed read claimed", files_read: ["README.md"], tests_or_checks: ["Read README.md"] };
+    toolUse("read-failed", "Read", { file_path: path.resolve("README.md") }); toolResult("read-failed", true); break;
   case "file-read-unreported-by-events":
     worker = { ...worker, summary: "file read claimed", files_read: ["README.md"], tests_or_checks: ["Read README.md"] }; break;
   default: throw new Error(`Unknown CLAUDE_TASK_FIXTURE_SCENARIO: ${scenario}`);

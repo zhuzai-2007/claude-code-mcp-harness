@@ -12,6 +12,7 @@ This Alpha provides a synchronous, human-supervised path from ChatGPT Web throug
 - Mode-specific audit evidence requirements for plan, review, and run.
 - Full preservation of strict Worker summaries and complete `cc_get_result` artifact retrieval.
 - Independent Claude Code tool-event artifacts with self-report cross-validation for commands, checks, file access, and permission denials.
+- Real supervised dogfood creation and a follow-up feature iteration through ChatGPT Web, Secure MCP Tunnel, the local Bridge, and the bounded Worker.
 - Real-write smoke validation for files, directories, and symbolic links.
 - Windows process-tree termination on Bridge timeout.
 - CI smoke coverage, documentation hygiene checks, and portable Harness installation.
@@ -31,8 +32,9 @@ This Alpha provides a synchronous, human-supervised path from ChatGPT Web throug
 - Runtime permission requests cannot yet pause, notify, persist, and resume through ChatGPT.
 - Tool auditing is based on Claude Code `stream-json` events. It does not provide kernel-level proof, and provider/CLI variants that omit required tool events are conservatively rejected as unverifiable.
 - ChatGPT cannot be assumed to wake automatically after a response ends.
-- The final hardened write action still requires one manual ChatGPT Web confirmation after the updated Bridge is restarted.
+- One hardened ChatGPT Web write and a follow-up iteration have passed dogfood validation; every new provider, policy, or Worker version still requires a fresh bounded write smoke.
 - Phase B asynchronous Orchestrator, durable approvals, notification outbox, leases, and recovery are not implemented.
+- A synchronous ChatGPT tool call can end before a long Worker finishes. Preserve the run ID and use `cc_get_result`; this is result recovery, not asynchronous orchestration.
 
 ## Local startup
 
@@ -64,6 +66,6 @@ This Alpha provides a synchronous, human-supervised path from ChatGPT Web throug
    .\scripts\start-openai-tunnel.ps1 -ReadyOnly
    ```
 
-7. In ChatGPT Developer mode, refresh the app after restarting the updated Bridge, run a read-only plan first, then manually confirm one minimal hardened write.
+7. In ChatGPT Developer mode, refresh the app after restarting the Bridge, run a read-only plan first, then manually confirm one minimal hardened write for the current environment.
 
-The updated `server.mjs` is not loaded into an already-running Node process. Restart the Bridge only during an operator-approved maintenance window; this release preparation does not stop or restart it.
+Changes to `server.mjs` or the Harness are not loaded into an already-running Node process. Restart the Bridge only during an operator-approved maintenance window. The event-audit dogfood evidence above used a restarted Bridge.

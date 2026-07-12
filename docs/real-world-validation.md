@@ -1,5 +1,19 @@
 # Real-World Validation
 
+This document records bounded Alpha evidence, not a production-readiness claim. Claude tool auditing is event-level evidence and is not an operating-system audit trail.
+
+## 2026-07-12 Supervised MCP Dogfood
+
+The restarted Bridge loaded the event-auditing Harness and was exercised through ChatGPT Web and Secure MCP Tunnel.
+
+- Plan run `20260712-233746-750` reported Glob use while the independent stream showed Read. The Harness rejected it with `unverifiable_check_evidence`, demonstrating conservative mismatch handling.
+- Approved creation run `20260712-234124-202` completed with `observed_tools = [Read, Edit]`, no observed shell commands, no permission denials, and no audit issues.
+- The bounded local result created only `workspace/dogfood-study-board/index.html`, `styles.css`, and `app.js`. These ignored dogfood files are not release artifacts.
+- Browser checks covered adding and deleting tasks, complete/incomplete transitions, filters, overdue state, localStorage persistence, Chinese UI, responsive layout, and safe text rendering of HTML-like user input.
+- A later supervised natural-language iteration added and verified a clear-completed action.
+
+This validates one real creation and one follow-up iteration. It does not add a persistent task queue, background recovery, or asynchronous approval system.
+
 This project uses mock tests for default regression checks and separate real-worker tests for capability validation.
 
 ## Natural-Language Worker Smokes

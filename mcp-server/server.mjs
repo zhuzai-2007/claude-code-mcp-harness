@@ -288,7 +288,7 @@ function getResult(runId = "latest") {
 function createServer() {
   const server = new McpServer({
     name: "codex-claude-worker-harness-bridge",
-    version: "0.1.0"
+    version: "0.1.1-alpha"
   });
 
   server.registerTool(

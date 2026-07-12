@@ -27,3 +27,11 @@ tunnel-client-profile*.yml
 *.bak-*
 *.backup-*
 *.working-*
+*.log
+**/claude-output.json
+**/claude-events.jsonl
+**/tool-events.json
+**/worker-result.normalized.json
+**/result.json
+**/in_progress.json
+**/project-ledger.jsonl

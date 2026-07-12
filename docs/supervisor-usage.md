@@ -68,6 +68,10 @@ After every worker run, ChatGPT must call:
 
 ChatGPT should use the normalized result as the primary source of truth. If the normalized result reports failure, timeout, policy blocking, invalid input, or incomplete output, ChatGPT must report that state clearly instead of assuming success.
 
+For real Worker runs, the normalized result also exposes event-derived `observed_tools`, `observed_commands`, `permission_denials`, `observed_file_targets`, and `audit_issues`. Worker claims are not sufficient when they conflict with successful, non-denied Claude Code events. Any `audit_validation_failed` result remains a failure and requires supervisor review.
+
+If ChatGPT's synchronous tool call ends before the Worker completes, retain the run ID and use `cc_get_result` later. This recovery path does not make the Alpha asynchronous and does not automatically reconnect, notify, or resume a conversation.
+
 When `artifact_status` is `unvalidated_partial_artifacts_possible`, the worker failed but reported files, changes, or checks. Treat those files as untrusted partial output: inspect the run directory, run independent validation, and record whether the artifacts are usable. Do not convert the run to success based only on the worker report.
 
 The worker's own `tests_or_checks` field is not sufficient for acceptance. ChatGPT must independently inspect the changed files and run the smallest relevant syntax, unit, smoke, static, or artifact check available in the local context.

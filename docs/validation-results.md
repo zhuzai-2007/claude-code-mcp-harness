@@ -176,4 +176,14 @@ These results pass the hardened synchronous read and bounded-write gates. Write 
 - Self-reported checks without successful tool events, unreported observed shell commands, unmatched file reads, and denied tool calls now fail as `audit_validation_failed` with specific entries in `audit_issues`.
 - Fixture coverage includes long summaries, absent-event command claims, an observed LS success, an unreported Bash command, a permission denial, and an unmatched file-read claim.
 - A bounded live CLI probe confirmed the installed Claude Code 2.1.201 JSONL envelope behavior, but the configured provider exhausted retries before producing a real tool call. Tool block parsing therefore follows Claude Code's documented message content contract and remains covered by deterministic fixtures; a final provider-backed read/write revalidation is still required after the Bridge is restarted.
-- A later provider-backed attempt produced real `Read`, `Bash`, `tool_result`, and permission-denial events. It also proved that `--allowedTools` is not an exclusive allowlist, so the Harness now passes explicit `--disallowedTools`; run mode denies Bash. The real write was rejected because the Worker violated the strict JSON contract and used Bash, and the temporary marker was removed. Final hardened ChatGPT write revalidation remains pending.
+- A later provider-backed attempt produced real `Read`, `Bash`, `tool_result`, and permission-denial events. It also proved that `--allowedTools` is not an exclusive allowlist, so the Harness now passes explicit `--disallowedTools`; run mode denies Bash. That attempt was rejected because the Worker violated the strict JSON contract and used Bash, and the temporary marker was removed. The subsequent restarted-Bridge acceptance below completed the hardened write revalidation.
+
+### Restarted-Bridge dogfood acceptance
+
+- Plan run `20260712-233746-750` was correctly rejected: the Worker claimed Glob evidence while the event stream observed Read, producing `unverifiable_check_evidence`.
+- Approved creation run `20260712-234124-202` succeeded with observed Read/Edit events, no shell commands, no permission denials, and no audit issues.
+- The bounded result affected only the ignored `workspace/dogfood-study-board/` HTML, CSS, and JavaScript files.
+- Browser acceptance covered task creation/deletion, completion toggles, filters, overdue status, persistence, Chinese UI, responsive behavior, and inert rendering of HTML-like input.
+- A subsequent supervised iteration added and verified clear-completed behavior.
+
+This closes the local hardened-write dogfood gate for the synchronous Alpha. It does not provide OS-level isolation or Phase B asynchronous durability.

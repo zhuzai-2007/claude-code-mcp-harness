@@ -129,6 +129,9 @@ Add-Result 'observed-bash-must-be-reported' (($bashMismatch.exitCode -eq 1) -and
 $deniedCheck = Invoke-FixtureScenario -Scenario 'permission-denial' -Task 'read a file and report the check'
 Add-Result 'permission-denial-is-not-check-evidence' (($deniedCheck.exitCode -eq 1) -and ($deniedCheck.result.error.message -match 'unverifiable_check_evidence') -and ($deniedCheck.result.permission_denials.Count -eq 1)) "exit=$($deniedCheck.exitCode) denials=$($deniedCheck.result.permission_denials.Count)"
 
+$failedCheck = Invoke-FixtureScenario -Scenario 'failed-tool-result' -Task 'claim a read whose tool result failed'
+Add-Result 'failed-tool-result-is-not-check-evidence' (($failedCheck.exitCode -eq 1) -and ($failedCheck.result.error.message -match 'file_audit_mismatch') -and ($failedCheck.result.permission_denials.Count -eq 0)) "exit=$($failedCheck.exitCode) denials=$($failedCheck.result.permission_denials.Count)"
+
 $fileMismatch = Invoke-FixtureScenario -Scenario 'file-read-unreported-by-events' -Task 'claim a file read without an event'
 Add-Result 'reported-file-read-must-be-observed' (($fileMismatch.exitCode -eq 1) -and ($fileMismatch.result.error.message -match 'file_audit_mismatch')) "exit=$($fileMismatch.exitCode) error=$($fileMismatch.result.error.message)"
 

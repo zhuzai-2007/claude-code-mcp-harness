@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $ProjectRoot = ".",
-    [string[]] $IncludePath = @("README.md", ".agents\README.md", "mcp-server\README.md", "docs", "skills\codex-claude-worker", "examples"),
+    [string[]] $IncludePath = @("README.md", "README.zh-CN.md", "SECURITY.md", ".agents\README.md", "mcp-server\README.md", "docs", "skills\codex-claude-worker", "examples"),
     [switch] $Json
 )
 
@@ -74,11 +74,11 @@ $files = @($files | Sort-Object -Unique | Where-Object {
 
 foreach ($file in $files) {
     $relativePath = Get-RelativePathCompat $root $file
-    $lines = @(Get-Content -LiteralPath $file)
+    $lines = @(Get-Content -LiteralPath $file -Encoding UTF8)
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $line = [string]$lines[$i]
         $lineNumber = $i + 1
-        if ($line -match '[\u9200-\u9FFF]') {
+        if ($line -match '(?:\uFFFD|\u9225\S?)') {
             Add-Finding $findings $relativePath $lineNumber 'possible-mojibake' $line
         }
         if ($line -match '[A-Za-z]:\\(?:Users|agent_testing_field|agent|temp|tmp)\\') {
