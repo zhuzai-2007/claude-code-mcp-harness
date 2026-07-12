@@ -1,11 +1,12 @@
 # Codex-Claude Worker MCP Bridge
 
-Minimal MCP Streamable HTTP bridge for the local `.agents` PowerShell harness.
+Minimal MCP Streamable HTTP bridge for the local `.agents` PowerShell harness. Keep it bound to loopback and use OpenAI Secure MCP Tunnel for ChatGPT access.
 
 This is a Claude Code harness bridge, not a general shell server, filesystem server, or raw Claude CLI wrapper. It exposes only fixed MCP tools that call the allowlisted harness scripts:
 
 - `.agents/claude-task.ps1`
 - `.agents/summary.ps1`
+- `.agents/ledger.ps1`
 
 It does not expose generic `exec_shell`, `run_powershell`, `write_file`, `read_file`, or `delete_file` tools.
 
@@ -68,7 +69,8 @@ http://<local-bind-host>:<local-port>/mcp
 - `cc_review_task`: calls `claude-task.ps1 review -Task ...`.
 - `cc_run_approved_task`: calls `claude-task.ps1 run -Task ... -ApprovedBy ... -ApprovalReason ...`.
 - `cc_get_latest_summary`: calls `summary.ps1 -RunId latest -IncludeIncomplete`.
-- `cc_get_result`: reads the latest `worker-result.normalized.json`; v1 only accepts `runId = "latest"`.
+- `cc_get_ledger`: calls `ledger.ps1 -Tail <n> -Json` and returns recent project-ledger entries.
+- `cc_get_result`: reads `worker-result.normalized.json` by an exact run ID, or accepts `runId = "latest"` for operator convenience.
 
 Recommended first tool sequence:
 
@@ -76,38 +78,38 @@ Recommended first tool sequence:
 2. `cc_plan_task`
 3. `cc_get_latest_summary`
 4. `cc_get_result` with `runId: "latest"`
+5. `cc_get_ledger`
 
-## ChatGPT + ngrok
+`cc_plan_task`, `cc_review_task`, and `cc_run_approved_task` accept optional `mockWorker: true`. This passes `-MockWorker` to the harness so the bridge can validate MCP transport, PowerShell invocation, run records, summaries, and normalized results without invoking Claude Code. Defaults remain unchanged.
 
-Expose the local server:
+## ChatGPT + OpenAI Secure MCP Tunnel
+
+Do not expose port 8787 directly. Keep the bridge running locally and follow `docs/secure-mcp-tunnel.md` from the repository root. The supported path uses `tunnel-client` to establish outbound HTTPS to OpenAI while the MCP bridge remains private.
+
+After the profile has been initialized, run:
 
 ```powershell
-.\scripts\start-ngrok.ps1
+.\scripts\start-openai-tunnel.ps1 -Profile codex-claude-worker
 ```
 
-The wrapper keeps the local host-header details inside `scripts/start-ngrok.ps1`.
+`cc_run_approved_task` is write-capable because it invokes harness `run` mode. Keep default approval fields unset and provide explicit audit metadata on every write-capable call. ChatGPT workspace permissions and action confirmations do not turn this harness into an OS sandbox.
 
-In ChatGPT MCP settings, use:
+The legacy `start-ngrok.ps1` wrapper is retained only for isolated compatibility experiments. It requires an explicit risk acknowledgement because it creates unauthenticated public ingress.
 
-```text
-https://example.invalid
-```
-
-When ngrok is running, this local MCP endpoint is public for the lifetime of the tunnel. Only expose it in trusted sessions.
-
-`cc_run_approved_task` is write-capable because it invokes harness `run` mode. Only expose it in trusted sessions. Safer mode: remove `defaultApprovedBy` and `defaultApprovalReason` from `config.json`, then provide explicit `approvedBy` and `approvalReason` on every write-capable call.
+For ChatGPT web validation, follow `docs/real-world-validation.md` from the repository root and use a distinct bounded `workspace/<task-id>/` directory for each test.
 
 ## Configuration
 
-Copy `config.example.json` to `config.json` and adjust it locally. Do not commit a real `config.json`; it may contain local paths and temporary ngrok origins.
+Copy `config.example.json` to `config.json` and adjust it locally. Do not commit a real `config.json`; it may contain local paths.
 
 ```json
 {
   "projectRoot": "D:/path/to/your/project",
   "workerTimeoutSeconds": 300,
-  "defaultApprovedBy": "local-user",
-  "defaultApprovalReason": "User explicitly approved this run through ChatGPT MCP.",
-  "host": "localhost",
+  "maxBudgetUsd": 0.20,
+  "defaultApprovedBy": null,
+  "defaultApprovalReason": null,
+  "host": "127.0.0.1",
   "port": 8787,
   "stdoutLimit": 12000,
   "stderrLimit": 12000,
@@ -120,17 +122,15 @@ Copy `config.example.json` to `config.json` and adjust it locally. Do not commit
 
 If an HTTP `Origin` header is present, the bridge validates it. Localhost origins are allowed; other origins must appear in `allowedOrigins`.
 
-`requireAuth` may appear in local config files, but it is not implemented in v0.1 and does not provide real authentication. Do not rely on it as an access control boundary.
+There is no application authentication layer in the local bridge. Keep it bound to a local interface and use OpenAI Secure MCP Tunnel or an independently authenticated reverse proxy for remote access.
 
-There is no authentication layer in v0.1. Keep the bridge bound to a local interface and treat any ngrok URL as a temporary public endpoint.
+Every task tool accepts an optional `maxBudgetUsd` capped at `5.00`. The bridge default is `0.20`, independent of a larger project-local Claude wrapper default.
 
 The current implementation strips a UTF-8 BOM when reading JSON config/result files. This keeps PowerShell-edited JSON usable.
 
 ## Process I/O
 
-`claude-task.ps1` is spawned with `stdio: inherit`. This is intentional: Claude Code can hang in a Node pipe environment in some auth, trust, permission, or terminal-interaction paths.
-
-`summary.ps1` still uses piped stdout/stderr so the bridge can capture summary output and return it through MCP.
+`claude-task.ps1` inherits the Bridge process stdio because some Claude Code provider/authentication paths can stall behind Node pipes. The Bridge assigns the run ID before spawning the Harness and reads the normalized result from the matching run directory. Summary and ledger scripts use piped stdout/stderr.
 
 ## Local Test
 
@@ -142,8 +142,20 @@ With the MCP bridge already running:
 
 This checks `/health`, runs `summary.ps1 -RunId latest -IncludeIncomplete`, and performs one short read-only `plan` task through the existing harness.
 
+For a real MCP initialize/list-tools/tool-call exchange without invoking Claude Code:
+
+```powershell
+.\scripts\test-mcp-protocol.ps1
+```
+
+Use `-RealPlan` and `-RealWrite` independently after the configured Claude Code provider is healthy. Both default to a maximum budget of `$0.20`; the write smoke creates, verifies, and removes a unique marker under the ignored `workspace/` directory.
+
+The real write smoke snapshots the project before and after the call. Outside the declared marker and known Harness runtime directories, any new directory, new file, modification, or deletion fails the smoke. This includes an empty malformed directory created when a Windows drive-letter path is incorrectly passed through Bash/MSYS.
+
 ## Safety Boundary
 
 This MCP server is a Claude Code harness bridge, not a sandbox and not a general command runner. It only spawns PowerShell with argument arrays for the allowlisted harness scripts, with `cwd` fixed to `projectRoot`. All internal paths are resolved and checked under `projectRoot`.
 
 The existing harness policy, approval gate, normalized results, timeout handling, and run summaries remain responsible for worker behavior.
+
+Every completed worker run appends local runtime audit data to `.agent-runs/project-ledger.jsonl`. This ledger is intended for supervisor review and large-task decomposition; it is not a security log.

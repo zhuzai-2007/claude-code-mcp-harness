@@ -27,7 +27,7 @@ $resolvedProjectRoot = if ($ProjectRoot) {
     [System.IO.Path]::GetFullPath($repoRoot)
 }
 
-$config = Get-Content -LiteralPath $examplePath -Raw | ConvertFrom-Json
+$config = Get-Content -LiteralPath $examplePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $config.projectRoot = $resolvedProjectRoot.Replace("\", "/")
 $json = $config | ConvertTo-Json -Depth 8
 Set-Content -LiteralPath $configPath -Value $json -Encoding UTF8

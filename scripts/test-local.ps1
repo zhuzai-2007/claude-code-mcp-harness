@@ -2,7 +2,8 @@
 param(
     [string] $HealthUrl = "http://127.0.0.1:8787/health",
     [int] $WorkerTimeoutSeconds = 30,
-    [switch] $SkipWorkerSmoke
+    [switch] $SkipWorkerSmoke,
+    [switch] $MockWorkerSmoke
 )
 
 Set-StrictMode -Version Latest
@@ -11,6 +12,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $summaryPath = Join-Path $repoRoot ".agents\summary.ps1"
 $taskPath = Join-Path $repoRoot ".agents\claude-task.ps1"
+$ledgerPath = Join-Path $repoRoot ".agents\ledger.ps1"
 
 function New-Check {
     param(
@@ -23,6 +25,7 @@ function New-Check {
 
 $healthChecks = [System.Collections.Generic.List[object]]::new()
 $summaryChecks = [System.Collections.Generic.List[object]]::new()
+$ledgerChecks = [System.Collections.Generic.List[object]]::new()
 $workerSmokeChecks = [System.Collections.Generic.List[object]]::new()
 
 try {
@@ -39,11 +42,20 @@ try {
     $summaryChecks.Add((New-Check "summary.ps1" $false $_.Exception.Message))
 }
 
+try {
+    $ledgerOutput = & powershell -NoProfile -File $ledgerPath -Tail 3 -Json 2>&1 | Out-String
+    $ledgerChecks.Add((New-Check "ledger.ps1" ($LASTEXITCODE -eq 0) (($ledgerOutput -split "`r?`n" | Select-Object -First 1) -join "")))
+} catch {
+    $ledgerChecks.Add((New-Check "ledger.ps1" $false $_.Exception.Message))
+}
+
 if ($SkipWorkerSmoke) {
     $workerSmokeChecks.Add((New-Check "claude-task.ps1 plan" $true "Skipped by -SkipWorkerSmoke."))
 } else {
     try {
-        $null = & powershell -NoProfile -File $taskPath plan -Task "Return exactly OK and nothing else." -WorkerTimeoutSeconds $WorkerTimeoutSeconds 2>&1 | Out-String
+        $taskArgs = @("plan", "-Task", "Return exactly OK and nothing else.", "-WorkerTimeoutSeconds", $WorkerTimeoutSeconds)
+        if ($MockWorkerSmoke) { $taskArgs += "-MockWorker" }
+        $null = & powershell -NoProfile -File $taskPath @taskArgs 2>&1 | Out-String
         $planExitCode = $LASTEXITCODE
         $planSummary = & powershell -NoProfile -File $summaryPath -RunId latest -IncludeIncomplete 2>&1 | Out-String
         $summaryExitCode = $LASTEXITCODE
@@ -61,14 +73,16 @@ if ($SkipWorkerSmoke) {
     }
 }
 
-$allChecks = @($healthChecks) + @($summaryChecks) + @($workerSmokeChecks)
+$allChecks = @($healthChecks) + @($summaryChecks) + @($ledgerChecks) + @($workerSmokeChecks)
 $ok = -not ($allChecks | Where-Object { -not $_.ok })
 [pscustomobject]@{
     ok = $ok
     workerTimeoutSeconds = $WorkerTimeoutSeconds
     skipWorkerSmoke = [bool]$SkipWorkerSmoke
+    mockWorkerSmoke = [bool]$MockWorkerSmoke
     health = $healthChecks
     summary = $summaryChecks
+    ledger = $ledgerChecks
     workerSmoke = $workerSmokeChecks
 } | ConvertTo-Json -Depth 6
 

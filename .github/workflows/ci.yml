@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install MCP dependencies
+        shell: pwsh
+        working-directory: mcp-server
+        run: npm ci
+      - name: Harness smoke
+        shell: pwsh
+        run: .\.agents\tests\smoke.ps1 -Json
+      - name: Portable install smoke
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .\.agent-runs | Out-Null
+          .\install.ps1 -TargetProject .\.agent-runs\installed-harness-smoke
+          .\.agent-runs\installed-harness-smoke\.agents\tests\smoke.ps1 -Json
+      - name: MCP server syntax
+        shell: pwsh
+        run: |
+          node --check .\mcp-server\server.mjs
+          node --check .\mcp-server\smoke-client.mjs
+          node --check .\mcp-server\side-effect-guard.mjs
+          node .\mcp-server\side-effect-guard.test.mjs
+      - name: MCP protocol smoke
+        shell: pwsh
+        run: .\scripts\test-mcp-protocol.ps1
+      - name: Skill lite validation
+        shell: pwsh
+        run: .\scripts\validate-skill-lite.ps1
+      - name: Documentation hygiene
+        shell: pwsh
+        run: .\scripts\scan-doc-hygiene.ps1
+      - name: Skill harness verification
+        shell: pwsh
+        run: .\skills\codex-claude-worker\scripts\verify-harness.ps1 -ProjectRoot . -MockWorker

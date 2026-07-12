@@ -24,12 +24,16 @@ $targetRoot = Resolve-FullPathExistingOrParent $TargetProject
 $targetAgents = Join-Path $targetRoot '.agents'
 New-Item -ItemType Directory -Force -Path $targetAgents | Out-Null
 
-$portableFiles = @('claude-task.ps1', 'doctor.ps1', 'summary.ps1', 'approved-demo.ps1', 'README.md', '.gitignore')
+$portableFiles = @('claude-task.ps1', 'doctor.ps1', 'summary.ps1', 'ledger.ps1', 'approved-demo.ps1', 'README.md', '.gitignore')
 foreach ($file in $portableFiles) {
     Copy-Item -LiteralPath (Join-Path $sourceAgents $file) -Destination (Join-Path $targetAgents $file) -Force
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $targetAgents 'tests') | Out-Null
 Copy-Item -LiteralPath (Join-Path $sourceAgents 'tests\smoke.ps1') -Destination (Join-Path $targetAgents 'tests\smoke.ps1') -Force
+$sourceFixtures = Join-Path $sourceAgents 'tests\fixtures'
+if (Test-Path -LiteralPath $sourceFixtures) {
+    Copy-Item -LiteralPath $sourceFixtures -Destination (Join-Path $targetAgents 'tests\fixtures') -Recurse -Force
+}
 
 $targetPolicy = Join-Path $targetAgents 'policy.json'
 if ($Force -or -not (Test-Path -LiteralPath $targetPolicy)) {

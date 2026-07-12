@@ -9,6 +9,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 
 function Resolve-FullPath { param([string] $Path) return [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Path).Path) }
 function Get-RunDirs {
@@ -29,11 +32,11 @@ function Read-RunResult {
     param([string] $RunDir)
     $normalizedPath = Join-Path $RunDir 'worker-result.normalized.json'
     $resultPath = Join-Path $RunDir 'result.json'
-    if (Test-Path -LiteralPath $normalizedPath) { return Get-Content -LiteralPath $normalizedPath -Raw | ConvertFrom-Json }
-    if (Test-Path -LiteralPath $resultPath) { return Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json }
+    if (Test-Path -LiteralPath $normalizedPath) { return Get-Content -LiteralPath $normalizedPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    if (Test-Path -LiteralPath $resultPath) { return Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json }
     $metaPath = Join-Path $RunDir 'meta.json'
     $inProgressPath = Join-Path $RunDir 'in_progress.json'
-    $meta = if (Test-Path -LiteralPath $metaPath) { Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json } else { $null }
+    $meta = if (Test-Path -LiteralPath $metaPath) { Get-Content -LiteralPath $metaPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     return [pscustomobject]@{
         status = 'incomplete'
         mode = if ($meta -and $meta.mode) { $meta.mode } else { $null }

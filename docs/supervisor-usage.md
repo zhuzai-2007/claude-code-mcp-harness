@@ -8,6 +8,19 @@ The user should provide a high-level goal in normal language. The user does not 
 
 ChatGPT is responsible for translating the goal into the correct MCP tool calls, worker prompt, approval text, and follow-up result checks.
 
+## Natural-Language Request Translation
+
+Most user requests are ordinary prompts, not full specifications. Before invoking the worker, ChatGPT/Codex must create a bounded task brief:
+
+- raw user intent
+- target path or approved file list
+- deliverables
+- assumptions made by the supervisor
+- actions that are explicitly forbidden
+- acceptance checks the supervisor will run after completion
+
+Do not ask the user to write worker tool parameters. Ask a clarification only when the write boundary, risk level, or expected artifact is genuinely ambiguous.
+
 ## Default Auto-Run Scope
 
 For small tasks that only create files under a new directory inside `workspace/`, ChatGPT may call `cc_run_approved_task` by default without a second user confirmation.
@@ -51,8 +64,23 @@ After every worker run, ChatGPT must call:
 
 1. `cc_get_latest_summary`
 2. `cc_get_result` with `runId = "latest"`
+3. `cc_get_ledger` when using the MCP bridge, or `.\.agents\ledger.ps1 -Tail 5` when using PowerShell directly
 
 ChatGPT should use the normalized result as the primary source of truth. If the normalized result reports failure, timeout, policy blocking, invalid input, or incomplete output, ChatGPT must report that state clearly instead of assuming success.
+
+When `artifact_status` is `unvalidated_partial_artifacts_possible`, the worker failed but reported files, changes, or checks. Treat those files as untrusted partial output: inspect the run directory, run independent validation, and record whether the artifacts are usable. Do not convert the run to success based only on the worker report.
+
+The worker's own `tests_or_checks` field is not sufficient for acceptance. ChatGPT must independently inspect the changed files and run the smallest relevant syntax, unit, smoke, static, or artifact check available in the local context.
+
+For natural-language tasks, also check whether the worker output actually satisfies the original user intent, not only the translated prompt.
+
+For README, documentation, or user-facing text, also run or mirror:
+
+```powershell
+.\scripts\scan-doc-hygiene.ps1
+```
+
+This catches mojibake, real local paths, local usernames, token-looking strings, and real tunnel URLs before artifacts are treated as release-ready.
 
 ## Budget Guidance
 
@@ -66,6 +94,8 @@ ChatGPT should avoid repeatedly raising the budget inside a live task. Cost cont
 
 Do not use Codex or another patch agent to run live Claude worker tests as part of ordinary supervisor operation. Live worker tests should be run by the user in a real PowerShell terminal where Claude Code can use its normal terminal, auth, trust, and adapter environment.
 
+Use mock worker mode only to validate the MCP bridge, PowerShell harness, summaries, and normalized result plumbing. A mock success does not prove that the real Claude worker or adapter can complete the task.
+
 Recommended cycle:
 
 1. `generate` or `patch-only` worker run with a narrow write boundary.
@@ -73,6 +103,8 @@ Recommended cycle:
 3. If needed, start a separate fix run with the test failure summary.
 
 This avoids long compound worker runs and keeps each run easier to inspect.
+
+For real local and ChatGPT web MCP smoke procedures, see `docs/real-world-validation.md`.
 
 ## When To Ask For Second Confirmation
 
@@ -101,4 +133,6 @@ The intended flow is:
 3. ChatGPT generates a bounded worker prompt.
 4. ChatGPT calls the fixed MCP harness tools.
 5. ChatGPT reads latest summary and normalized result.
-6. ChatGPT reports the result and any next required user decision.
+6. ChatGPT reads the project ledger entry.
+7. ChatGPT performs independent validation.
+8. ChatGPT reports the result and any next required user decision.

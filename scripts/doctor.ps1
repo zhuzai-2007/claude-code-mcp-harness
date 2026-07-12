@@ -30,8 +30,8 @@ function Invoke-VersionCheck {
     }
 
     $job = Start-Job -ScriptBlock {
-        param($Exe, $Args)
-        & $Exe @Args 2>&1 | Out-String
+        param($Exe, $CommandArgs)
+        & $Exe @CommandArgs 2>&1 | Out-String
         return $LASTEXITCODE
     } -ArgumentList $cmd.Source, $Arguments
 
@@ -47,6 +47,15 @@ function Invoke-VersionCheck {
     return New-Check $Command $true $firstLine
 }
 
+function Test-CommandAvailable {
+    param([Parameter(Mandatory = $true)][string] $Command)
+    $cmd = Get-Command $Command -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        return New-Check $Command $false "Command not found."
+    }
+    return New-Check $Command $true $cmd.Source
+}
+
 $checks = [System.Collections.Generic.List[object]]::new()
 $checks.Add((Invoke-VersionCheck "node"))
 $checks.Add((Invoke-VersionCheck "npm"))
@@ -56,7 +65,7 @@ $checks.Add((New-Check "mcp-server/config.json" (Test-Path -LiteralPath $configP
 $projectRoot = $null
 if (Test-Path -LiteralPath $configPath) {
     try {
-        $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $projectRoot = [System.IO.Path]::GetFullPath([string]$config.projectRoot)
         $checks.Add((New-Check "projectRoot" (Test-Path -LiteralPath $projectRoot) $projectRoot))
     } catch {
@@ -72,9 +81,11 @@ if (-not $projectRoot) {
 
 $claudeTask = Join-Path $projectRoot ".agents\claude-task.ps1"
 $summary = Join-Path $projectRoot ".agents\summary.ps1"
+$ledger = Join-Path $projectRoot ".agents\ledger.ps1"
 $checks.Add((New-Check ".agents/claude-task.ps1" (Test-Path -LiteralPath $claudeTask) $claudeTask))
 $checks.Add((New-Check ".agents/summary.ps1" (Test-Path -LiteralPath $summary) $summary))
-$checks.Add((Invoke-VersionCheck "claude"))
+$checks.Add((New-Check ".agents/ledger.ps1" (Test-Path -LiteralPath $ledger) $ledger))
+$checks.Add((Test-CommandAvailable "claude"))
 
 $ok = -not ($checks | Where-Object { -not $_.ok })
 $result = [pscustomobject]@{

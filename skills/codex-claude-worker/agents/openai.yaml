@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Claude Worker"
+  short_description: "Delegate bounded tasks from Codex to Claude Code workers."
+  default_prompt: "Use $codex-claude-worker to plan, run, review, and validate a bounded Claude Code worker task."

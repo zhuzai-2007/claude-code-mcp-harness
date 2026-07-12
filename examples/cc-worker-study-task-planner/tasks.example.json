@@ -1,0 +1,9 @@
+{
+  "tasks": [
+    {"title": "Review chapter 5", "priority": "medium"},
+    {"title": "Prepare flashcards", "priority": "low"},
+    {"title": "Complete homework", "priority": "high"},
+    {"title": "Read lecture notes", "priority": "high"},
+    {"title": "Practice problems", "priority": "medium"}
+  ]
+}

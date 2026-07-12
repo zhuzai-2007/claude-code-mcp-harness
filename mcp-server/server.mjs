@@ -35,10 +35,11 @@ const projectRoot = resolveInsideProject(".");
 const agentsDir = resolveInsideProject(".agents");
 const claudeTaskPath = resolveInsideProject(".agents", "claude-task.ps1");
 const summaryPath = resolveInsideProject(".agents", "summary.ps1");
-const allowedScriptPaths = new Set([claudeTaskPath, summaryPath].map((p) => path.resolve(p).toLowerCase()));
+const ledgerPath = resolveInsideProject(".agents", "ledger.ps1");
+const allowedScriptPaths = new Set([claudeTaskPath, summaryPath, ledgerPath].map((p) => path.resolve(p).toLowerCase()));
 
 function scriptPath(scriptName) {
-  const selected = scriptName === "claude-task.ps1" ? claudeTaskPath : scriptName === "summary.ps1" ? summaryPath : null;
+  const selected = scriptName === "claude-task.ps1" ? claudeTaskPath : scriptName === "summary.ps1" ? summaryPath : scriptName === "ledger.ps1" ? ledgerPath : null;
   if (!selected || !allowedScriptPaths.has(path.resolve(selected).toLowerCase())) {
     throw new Error(`Script is not allowlisted: ${scriptName}`);
   }
@@ -49,6 +50,12 @@ function limitNumber(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+function limitBudget(value, fallback = 0.10) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.round(Math.max(0.01, Math.min(5.00, parsed)) * 100) / 100;
 }
 
 function truncate(text, limit) {
@@ -85,7 +92,25 @@ function classifyExit(exitCode, timedOut) {
   return "failed";
 }
 
-function runHarness(scriptName, args, workerTimeoutSeconds) {
+function terminateProcessTree(child) {
+  if (!child?.pid) return;
+  if (process.platform !== "win32") {
+    child.kill("SIGTERM");
+    return;
+  }
+
+  const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+    shell: false,
+    windowsHide: true,
+    stdio: "ignore"
+  });
+  killer.on("error", () => child.kill());
+  killer.on("close", (exitCode) => {
+    if (exitCode !== 0 && child.exitCode === null) child.kill();
+  });
+}
+
+function runHarness(scriptName, args, workerTimeoutSeconds, requestedRunId = null) {
   const psScript = scriptPath(scriptName);
   const timeoutSeconds = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600) + 30;
   const stdoutLimit = limitNumber(config.stdoutLimit, 12000, 1000, 200000);
@@ -109,7 +134,7 @@ function runHarness(scriptName, args, workerTimeoutSeconds) {
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      terminateProcessTree(child);
     }, timeoutSeconds * 1000);
 
     if (child.stdout) {
@@ -136,8 +161,7 @@ function runHarness(scriptName, args, workerTimeoutSeconds) {
         stdoutTruncated: out.truncated,
         stderrTruncated: err.truncated,
         durationSeconds: (Date.now() - startedAt) / 1000,
-        command: ["powershell", ...commandArgs],
-        cwd: projectRoot
+        command: scriptName
       });
     });
     child.on("close", (exitCode) => {
@@ -146,28 +170,66 @@ function runHarness(scriptName, args, workerTimeoutSeconds) {
       clearTimeout(timer);
       const out = truncate(stdout, stdoutLimit);
       const err = truncate(stderr, stderrLimit);
+      const harnessResult = requestedRunId ? getHarnessResult(requestedRunId) : extractHarnessResult(stdout);
       resolve({
         status: classifyExit(exitCode, timedOut),
         exitCode,
+        ...harnessResult,
         stdout: out.text,
         stderr: err.text,
         stdoutTruncated: out.truncated,
         stderrTruncated: err.truncated,
         durationSeconds: (Date.now() - startedAt) / 1000,
-        command: ["powershell", ...commandArgs],
-        cwd: projectRoot
+        command: scriptName
       });
     });
   });
 }
 
+function generateRunId() {
+  for (let offset = 0; offset < 1000; offset += 1) {
+    const now = new Date(Date.now() + offset);
+    const pad = (value, width = 2) => String(value).padStart(width, "0");
+    const runId = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${pad(now.getMilliseconds(), 3)}`;
+    const exists = [
+      resolveInsideProject(".agents", "runs", runId),
+      resolveInsideProject(".agent-runs", runId)
+    ].some((candidate) => fs.existsSync(candidate));
+    if (!exists) return runId;
+  }
+  throw new Error("Unable to allocate a unique runId.");
+}
+
+function getHarnessResult(runId) {
+  const found = getResult(runId);
+  return {
+    runId,
+    result: found.status === "success" ? found.result : null
+  };
+}
+
+function extractHarnessResult(stdout) {
+  const runIdMatch = String(stdout || "").match(/^RunId:\s*([^\r\n]+)\s*$/im);
+  if (!runIdMatch) return { runId: null, result: null };
+  const runId = runIdMatch[1].trim();
+  if (!/^\d{8}-\d{6}-\d{3}$/.test(runId)) {
+    return { runId: null, result: null };
+  }
+  const found = getResult(runId);
+  return {
+    runId,
+    result: found.status === "success" ? found.result : null
+  };
+}
+
 function getPingPayload() {
   return {
-    ok: fs.existsSync(agentsDir) && fs.existsSync(claudeTaskPath) && fs.existsSync(summaryPath),
+    ok: fs.existsSync(agentsDir) && fs.existsSync(claudeTaskPath) && fs.existsSync(summaryPath) && fs.existsSync(ledgerPath),
     projectRoot: normalizeSlashes(projectRoot),
     agentsDirExists: fs.existsSync(agentsDir) && fs.statSync(agentsDir).isDirectory(),
     claudeTaskExists: fs.existsSync(claudeTaskPath) && fs.statSync(claudeTaskPath).isFile(),
-    summaryExists: fs.existsSync(summaryPath) && fs.statSync(summaryPath).isFile()
+    summaryExists: fs.existsSync(summaryPath) && fs.statSync(summaryPath).isFile(),
+    ledgerExists: fs.existsSync(ledgerPath) && fs.statSync(ledgerPath).isFile()
   };
 }
 
@@ -196,12 +258,15 @@ function getRunDirectories() {
   return { checkedPaths, candidates };
 }
 
-function getLatestResult() {
+function getResult(runId = "latest") {
   const { checkedPaths, candidates } = getRunDirectories();
-  const found = candidates.find((candidate) => fs.existsSync(candidate.normalizedPath));
+  const found = runId === "latest"
+    ? candidates.find((candidate) => fs.existsSync(candidate.normalizedPath))
+    : candidates.find((candidate) => candidate.runId === runId && fs.existsSync(candidate.normalizedPath));
   if (!found) {
     return {
       status: "result_not_found",
+      runId,
       checkedPaths: checkedPaths.map(normalizeSlashes),
       runDirectoryCandidates: candidates.slice(0, 20).map((candidate) => ({
         runId: candidate.runId,
@@ -230,14 +295,17 @@ function createServer() {
     "cc_ping",
     {
       title: "Ping Worker Harness Bridge",
-      description: "Check that the fixed harness scripts exist under the configured project root."
+      description: "Check that the fixed harness scripts exist under the configured project root.",
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async () => jsonToolResult(getPingPayload())
   );
 
   const taskInputSchema = {
     prompt: z.string().min(1),
-    workerTimeoutSeconds: z.number().int().positive().max(3600).optional()
+    workerTimeoutSeconds: z.number().int().positive().max(3600).optional(),
+    maxBudgetUsd: z.number().positive().max(5).optional(),
+    mockWorker: z.boolean().optional()
   };
 
   server.registerTool(
@@ -245,11 +313,18 @@ function createServer() {
     {
       title: "Plan Worker Task",
       description: "Run the harness in read-only plan mode for a fixed task prompt.",
-      inputSchema: taskInputSchema
+      inputSchema: taskInputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async ({ prompt, workerTimeoutSeconds }) => {
+    async (input = {}) => {
+      const { prompt, workerTimeoutSeconds } = input;
+      const mockWorker = input?.mockWorker === true;
       const timeout = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600);
-      return jsonToolResult(await runHarness("claude-task.ps1", ["plan", "-Task", prompt, "-WorkerTimeoutSeconds", timeout], timeout));
+      const budget = limitBudget(input?.maxBudgetUsd, config.maxBudgetUsd ?? 0.10);
+      const runId = generateRunId();
+      const args = ["plan", "-Task", prompt, "-WorkerTimeoutSeconds", timeout, "-MaxBudgetUsd", budget, "-RunId", runId];
+      if (mockWorker) args.push("-MockWorker");
+      return jsonToolResult(await runHarness("claude-task.ps1", args, timeout, runId));
     }
   );
 
@@ -258,11 +333,18 @@ function createServer() {
     {
       title: "Review Worker Task",
       description: "Run the harness in read-only review mode for a fixed task prompt.",
-      inputSchema: taskInputSchema
+      inputSchema: taskInputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async ({ prompt, workerTimeoutSeconds }) => {
+    async (input = {}) => {
+      const { prompt, workerTimeoutSeconds } = input;
+      const mockWorker = input?.mockWorker === true;
       const timeout = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600);
-      return jsonToolResult(await runHarness("claude-task.ps1", ["review", "-Task", prompt, "-WorkerTimeoutSeconds", timeout], timeout));
+      const budget = limitBudget(input?.maxBudgetUsd, config.maxBudgetUsd ?? 0.10);
+      const runId = generateRunId();
+      const args = ["review", "-Task", prompt, "-WorkerTimeoutSeconds", timeout, "-MaxBudgetUsd", budget, "-RunId", runId];
+      if (mockWorker) args.push("-MockWorker");
+      return jsonToolResult(await runHarness("claude-task.ps1", args, timeout, runId));
     }
   );
 
@@ -275,10 +357,15 @@ function createServer() {
         prompt: z.string().min(1),
         approvedBy: z.string().min(1).optional(),
         approvalReason: z.string().min(1).optional(),
-        workerTimeoutSeconds: z.number().int().positive().max(3600).optional()
-      }
+        workerTimeoutSeconds: z.number().int().positive().max(3600).optional(),
+        maxBudgetUsd: z.number().positive().max(5).optional(),
+        mockWorker: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
     },
-    async ({ prompt, approvedBy, approvalReason, workerTimeoutSeconds }) => {
+    async (input = {}) => {
+      const { prompt, approvedBy, approvalReason, workerTimeoutSeconds } = input;
+      const mockWorker = input?.mockWorker === true;
       const finalApprovedBy = approvedBy || config.defaultApprovedBy;
       const finalApprovalReason = approvalReason || config.defaultApprovalReason;
       if (!finalApprovedBy || !finalApprovalReason) {
@@ -288,21 +375,30 @@ function createServer() {
         });
       }
       const timeout = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600);
+      const budget = limitBudget(input?.maxBudgetUsd, config.maxBudgetUsd ?? 0.10);
+      const runId = generateRunId();
+      const args = [
+        "run",
+        "-Task",
+        prompt,
+        "-ApprovedBy",
+        finalApprovedBy,
+        "-ApprovalReason",
+        finalApprovalReason,
+        "-WorkerTimeoutSeconds",
+        timeout,
+        "-MaxBudgetUsd",
+        budget,
+        "-RunId",
+        runId
+      ];
+      if (mockWorker) args.push("-MockWorker");
       return jsonToolResult(
         await runHarness(
           "claude-task.ps1",
-          [
-            "run",
-            "-Task",
-            prompt,
-            "-ApprovedBy",
-            finalApprovedBy,
-            "-ApprovalReason",
-            finalApprovalReason,
-            "-WorkerTimeoutSeconds",
-            timeout
-          ],
-          timeout
+          args,
+          timeout,
+          runId
         )
       );
     }
@@ -312,28 +408,40 @@ function createServer() {
     "cc_get_latest_summary",
     {
       title: "Get Latest Harness Summary",
-      description: "Run summary.ps1 for the latest run including incomplete runs."
+      description: "Run summary.ps1 for the latest run including incomplete runs.",
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async () => jsonToolResult(await runHarness("summary.ps1", ["-RunId", "latest", "-IncludeIncomplete"], 30))
+  );
+
+  server.registerTool(
+    "cc_get_ledger",
+    {
+      title: "Get Worker Project Ledger",
+      description: "Read recent project-ledger entries written by the worker harness.",
+      inputSchema: {
+        tail: z.number().int().positive().max(200).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      const tail = limitNumber(input?.tail, 20, 1, 200);
+      return jsonToolResult(await runHarness("ledger.ps1", ["-Tail", tail, "-Json"], 30));
+    }
   );
 
   server.registerTool(
     "cc_get_result",
     {
       title: "Get Latest Normalized Result",
-      description: "Read the latest worker-result.normalized.json from known harness run directories. v1 only accepts runId=latest.",
+      description: "Read a worker-result.normalized.json by run ID, or use latest for operator convenience.",
       inputSchema: {
-        runId: z.literal("latest")
-      }
+        runId: z.union([z.literal("latest"), z.string().regex(/^\d{8}-\d{6}-\d{3}$/)])
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async ({ runId }) => {
-      if (runId !== "latest") {
-        return jsonToolResult({
-          status: "invalid_input",
-          error: "cc_get_result v1 only accepts runId = latest."
-        });
-      }
-      return jsonToolResult(getLatestResult());
+      return jsonToolResult(getResult(runId));
     }
   );
 

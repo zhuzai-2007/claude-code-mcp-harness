@@ -1,7 +1,7 @@
-﻿{
+{
   "schemaVersion": 2,
   "projectRoot": "<derived-from-.agents-directory>",
-  "defaultBudgetUsd": 0.10,
+  "defaultBudgetUsd": 0.2,
   "defaults": {
     "bare": true,
     "maxFilesRead": 20,
@@ -15,7 +15,7 @@
       "mayModifyFiles": false
     },
     "run": {
-      "permissionMode": "default",
+      "permissionMode": "acceptEdits",
       "outputFormat": "json",
       "allowedTools": ["Read", "Glob", "Grep", "LS", "Edit", "MultiEdit", "Write"],
       "mayModifyFiles": true,

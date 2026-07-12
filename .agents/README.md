@@ -1,4 +1,4 @@
-﻿# Codex-Claude Worker Harness
+# Codex-Claude Worker Harness
 
 Portable control layer for using Claude Code as a bounded worker under Codex supervision.
 
@@ -12,6 +12,7 @@ Run commands from the project root.
 .\.agents\claude-task.ps1 run -Task "Make the approved change." -ApprovedBy Codex -ApprovalReason "User approved this worker run."
 .\.agents\claude-task.ps1 review -Task "Review the current diff for bugs and missing checks."
 .\.agents\summary.ps1 -RunId latest
+.\.agents\ledger.ps1 -Tail 10
 ```
 
 ## Stable JSON CLI
@@ -26,9 +27,20 @@ Normalized result fields are stable: `status`, `mode`, `summary`, `files_read`, 
 
 Exit codes: `0=success`, `1=worker_failed`, `2=policy_blocked`, `3=invalid_input`, `4=environment_failed`.
 
+## Mock worker
+
+Use `-MockWorker` to verify harness run directory creation, `summary.ps1`, `result.json`, and `worker-result.normalized.json` without invoking Claude Code:
+
+```powershell
+.\.agents\claude-task.ps1 plan -Task "Return exactly OK and nothing else." -MockWorker
+.\.agents\summary.ps1 -RunId latest -IncludeIncomplete
+```
+
+Mock mode is opt-in only. The default behavior still invokes Claude Code after policy checks. Mock mode does not bypass approval or policy gates; `run` mode still requires `-ApprovedBy` and `-ApprovalReason`.
+
 ## Budget
 
-Default Claude worker budget is `0.10` USD per run. This default is intentionally conservative.
+Default Claude worker budget is `0.20` USD per run. This default is intentionally conservative.
 
 `MaxBudgetUsd` is the Claude Code / wrapper-side estimated budget. With third-party or domestic-model adapters, it may not match the actual amount charged by the upstream API platform.
 
@@ -60,6 +72,15 @@ Cost control should not rely only on `MaxBudgetUsd`. Keep tasks split, use appro
 The worker output is intentionally concise JSON to reduce Codex follow-up token use. Use `summary.ps1` first; inspect raw output only when needed.
 
 This harness is a policy and workflow boundary, not a full OS-level sandbox. Shell commands and child processes may still have broader system access unless constrained by the OS, container, VM, or restricted user account.
+
+## Project ledger
+
+Every completed run appends one JSONL record to `.agent-runs/project-ledger.jsonl`. The ledger is runtime state and is ignored by Git. It records run id, mode, status, approval metadata, allowed actions, summary, changes, checks, risks, blocked items, cost, and error.
+
+```powershell
+.\.agents\ledger.ps1 -Tail 20
+.\.agents\ledger.ps1 -Tail 20 -Json
+```
 
 
 ## Troubleshooting

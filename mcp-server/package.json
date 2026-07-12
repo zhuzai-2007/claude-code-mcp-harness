@@ -6,7 +6,9 @@
   "description": "MCP Streamable HTTP bridge for the local Codex-Claude worker harness.",
   "main": "server.mjs",
   "scripts": {
-    "start": "node ./server.mjs"
+    "start": "node ./server.mjs",
+    "test:mcp": "node ./smoke-client.mjs",
+    "test:side-effects": "node ./side-effect-guard.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
