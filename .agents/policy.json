@@ -10,21 +10,24 @@
   "modes": {
     "plan": {
       "permissionMode": "plan",
-      "outputFormat": "json",
+      "outputFormat": "stream-json",
       "allowedTools": ["Read", "Glob", "Grep", "LS"],
+      "disallowedTools": ["Bash", "Edit", "MultiEdit", "Write"],
       "mayModifyFiles": false
     },
     "run": {
       "permissionMode": "acceptEdits",
-      "outputFormat": "json",
+      "outputFormat": "stream-json",
       "allowedTools": ["Read", "Glob", "Grep", "LS", "Edit", "MultiEdit", "Write"],
+      "disallowedTools": ["Bash"],
       "mayModifyFiles": true,
       "requiresApproval": true
     },
     "review": {
       "permissionMode": "plan",
-      "outputFormat": "json",
+      "outputFormat": "stream-json",
       "allowedTools": ["Read", "Glob", "Grep", "LS", "Bash(git status *)", "Bash(git diff *)"],
+      "disallowedTools": ["Edit", "MultiEdit", "Write"],
       "mayModifyFiles": false
     }
   },

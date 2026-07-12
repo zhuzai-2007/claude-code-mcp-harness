@@ -9,6 +9,8 @@ const serverUrl = process.env.MCP_SERVER_URL || "http://127.0.0.1:8787/mcp";
 const realPlan = process.env.MCP_REAL_PLAN === "1";
 const realWrite = process.env.MCP_REAL_WRITE === "1";
 const maxBudgetUsd = Number(process.env.MCP_MAX_BUDGET_USD || "0.20");
+const resultRunId = process.env.MCP_RESULT_RUN_ID || "";
+const expectedSummaryMinLength = Number(process.env.MCP_EXPECT_SUMMARY_MIN_LENGTH || "0");
 const client = new Client({ name: "codex-claude-worker-smoke", version: "0.1.0" });
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(moduleDirectory, "..");
@@ -63,6 +65,13 @@ try {
   const exact = await client.callTool({ name: "cc_get_result", arguments: { runId } });
   assert(exact.structuredContent?.status === "success", "cc_get_result did not find the exact runId");
   assert(exact.structuredContent?.runId === runId, "cc_get_result returned a different runId");
+
+  if (resultRunId) {
+    const requested = await client.callTool({ name: "cc_get_result", arguments: { runId: resultRunId } });
+    const summaryLength = requested.structuredContent?.result?.summary?.length || 0;
+    assert(requested.structuredContent?.status === "success", `cc_get_result did not find requested regression run ${resultRunId}`);
+    assert(summaryLength >= expectedSummaryMinLength, `cc_get_result summary was truncated: ${summaryLength} < ${expectedSummaryMinLength}`);
+  }
 
   const beforeWrite = realWrite ? await snapshotTree(projectRoot) : null;
   const write = await client.callTool({

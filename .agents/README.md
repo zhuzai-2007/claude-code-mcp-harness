@@ -23,7 +23,7 @@ Future MCP wrappers should call the CLI through JSON input and consume `worker-r
 .\.agents\claude-task.ps1 plan -InputJson .\task.json
 ```
 
-Normalized result fields are stable: `status`, `mode`, `summary`, `files_read`, `changes_made`, `commands_run`, `tests_or_checks`, `risks`, `blocked_on`, `cost`, `artifacts`, and `error`.
+The seven Worker-required fields remain stable: `summary`, `files_read`, `changes_made`, `commands_run`, `tests_or_checks`, `risks`, and `blocked_on`. A successfully parsed strict Worker `summary` is stored in full. Optional supervisor fields include `observed_tools`, `observed_commands`, `permission_denials`, `observed_file_targets`, and `audit_issues`.
 
 Exit codes: `0=success`, `1=worker_failed`, `2=policy_blocked`, `3=invalid_input`, `4=environment_failed`.
 
@@ -67,9 +67,11 @@ Cost control should not rely only on `MaxBudgetUsd`. Keep tasks split, use appro
 
 ## Safety model
 
-`run` mode requires `-ApprovedBy` and `-ApprovalReason`. Git writes, dependency installs, network access, recursive deletes, and external directories are blocked unless the matching allow switch and approval metadata are present. `plan` and `review` are read-only at the tool policy level.
+`run` mode requires `-ApprovedBy` and `-ApprovalReason`. Git writes, dependency installs, network access, recursive deletes, and external directories are blocked unless the matching allow switch and approval metadata are present. Because Claude CLI treats `--allowedTools` as permission grants rather than an exclusive allowlist, plan/run also pass explicit `--disallowedTools` restrictions; run mode denies Bash and file-only work uses Read/Write/Edit. `plan` and `review` are read-only at the tool policy level.
 
-The worker output is intentionally concise JSON to reduce Codex follow-up token use. Use `summary.ps1` first; inspect raw output only when needed.
+Worker instructions still ask for concise JSON, but the Harness does not silently truncate a successfully parsed strict `summary`. `ConvertTo-ShortText` is reserved for explicitly untrusted fallback/error previews.
+
+Real Claude calls use `--output-format stream-json --verbose`. Each run keeps the final Claude result envelope in `claude-output.json`, the original JSONL message stream in `claude-events.jsonl`, and the independently derived tool audit in `tool-events.json`. A self-reported command, check, or file read without a matching successful, non-denied tool event fails with `audit_validation_failed`; `audit_issues` contains specific reasons such as `unverifiable_check_evidence`, `command_audit_mismatch`, or `file_audit_mismatch`. The event audit proves what Claude Code reported through its event stream, not what the operating system executed outside that stream.
 
 This harness is a policy and workflow boundary, not a full OS-level sandbox. Shell commands and child processes may still have broader system access unless constrained by the OS, container, VM, or restricted user account.
 

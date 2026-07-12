@@ -70,7 +70,7 @@ http://<local-bind-host>:<local-port>/mcp
 - `cc_run_approved_task`: calls `claude-task.ps1 run -Task ... -ApprovedBy ... -ApprovalReason ...`.
 - `cc_get_latest_summary`: calls `summary.ps1 -RunId latest -IncludeIncomplete`.
 - `cc_get_ledger`: calls `ledger.ps1 -Tail <n> -Json` and returns recent project-ledger entries.
-- `cc_get_result`: reads `worker-result.normalized.json` by an exact run ID, or accepts `runId = "latest"` for operator convenience.
+- `cc_get_result`: reads `worker-result.normalized.json` by an exact run ID, or accepts `runId = "latest"` for operator convenience. It returns the complete normalized `summary`; the Bridge does not apply the Harness stdout preview limit to this artifact response.
 
 Recommended first tool sequence:
 
@@ -159,3 +159,5 @@ This MCP server is a Claude Code harness bridge, not a sandbox and not a general
 The existing harness policy, approval gate, normalized results, timeout handling, and run summaries remain responsible for worker behavior.
 
 Every completed worker run appends local runtime audit data to `.agent-runs/project-ledger.jsonl`. This ledger is intended for supervisor review and large-task decomposition; it is not a security log.
+
+Real Worker runs also persist `claude-events.jsonl` and a normalized `tool-events.json`. The latter cross-checks Worker self-reporting against successful Claude Code tool events, including observed commands, permission denials, and read/write/edit targets. Because this depends on `server.mjs` and Harness changes, an already-running Bridge must be restarted in an operator-approved maintenance window before ChatGPT uses the new behavior.

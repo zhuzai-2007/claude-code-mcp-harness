@@ -10,6 +10,8 @@ This Alpha provides a synchronous, human-supervised path from ChatGPT Web throug
 - UTF-8 no-BOM worker artifacts with exact Unicode round-trip tests.
 - Non-strict or incomplete worker output is rejected as `audit_validation_failed`.
 - Mode-specific audit evidence requirements for plan, review, and run.
+- Full preservation of strict Worker summaries and complete `cc_get_result` artifact retrieval.
+- Independent Claude Code tool-event artifacts with self-report cross-validation for commands, checks, file access, and permission denials.
 - Real-write smoke validation for files, directories, and symbolic links.
 - Windows process-tree termination on Bridge timeout.
 - CI smoke coverage, documentation hygiene checks, and portable Harness installation.
@@ -27,6 +29,7 @@ This Alpha provides a synchronous, human-supervised path from ChatGPT Web throug
 
 - MCP calls remain synchronous. Browser, Tunnel, or Bridge interruptions are not yet represented by a durable task state machine.
 - Runtime permission requests cannot yet pause, notify, persist, and resume through ChatGPT.
+- Tool auditing is based on Claude Code `stream-json` events. It does not provide kernel-level proof, and provider/CLI variants that omit required tool events are conservatively rejected as unverifiable.
 - ChatGPT cannot be assumed to wake automatically after a response ends.
 - The final hardened write action still requires one manual ChatGPT Web confirmation after the updated Bridge is restarted.
 - Phase B asynchronous Orchestrator, durable approvals, notification outbox, leases, and recovery are not implemented.

@@ -108,10 +108,26 @@ function Get-WorkerJsonCandidates {
 
 function ConvertFrom-ClaudeCliText {
     param([AllowNull()][string] $Text)
-    if ([string]::IsNullOrWhiteSpace($Text)) { return @{ parsed = $null; worker = $null; parseError = $null; recovered = $false } }
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @{ parsed = $null; worker = $null; parseError = $null; recovered = $false; events = @() } }
     $parsed = $null
     $parseError = $null
-    try { $parsed = ($Text | ConvertFrom-Json) } catch { $parseError = $_.Exception.Message }
+    $events = @()
+    try {
+        $parsed = ($Text | ConvertFrom-Json)
+        $events = @($parsed)
+    } catch {
+        $parseError = $_.Exception.Message
+        $streamParseErrors = @()
+        foreach ($line in ($Text -split '\r?\n')) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $events += ($line | ConvertFrom-Json) } catch { $streamParseErrors += $_.Exception.Message }
+        }
+        $resultEvents = @($events | Where-Object { (Get-PropValue -Object $_ -Name 'type') -eq 'result' })
+        if ($resultEvents.Count -gt 0 -and $streamParseErrors.Count -eq 0) {
+            $parsed = $resultEvents[-1]
+            $parseError = $null
+        }
+    }
     $worker = $null
     $parsedResult = Get-PropValue -Object $parsed -Name 'result'
     if ($parsedResult) { $worker = ConvertFrom-WorkerJsonText ([string]$parsedResult) }
@@ -127,7 +143,7 @@ function ConvertFrom-ClaudeCliText {
     if (-not $worker -and -not [string]::IsNullOrWhiteSpace($Text)) {
         $worker = [pscustomobject]@{ summary = (ConvertTo-ShortText $Text); files_read = @(); changes_made = @(); commands_run = @(); tests_or_checks = @(); risks = @('Worker returned plain text instead of structured JSON.'); blocked_on = @() }
     }
-    return @{ parsed = $parsed; worker = $worker; parseError = $parseError; recovered = ($null -ne $parseError -and $null -ne $worker) }
+    return @{ parsed = $parsed; worker = $worker; parseError = $parseError; recovered = ($null -ne $parseError -and $null -ne $worker); events = @($events) }
 }
 
 function ConvertTo-ShortText {
@@ -137,6 +153,100 @@ function ConvertTo-ShortText {
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
     if ($text.Length -gt 300) { return $text.Substring(0, 300) }
     return $text
+}
+
+function ConvertTo-FullText {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    $text = if ($Value -is [string]) { $Value } else { ($Value | ConvertTo-Json -Depth 12 -Compress) }
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    return $text
+}
+
+function Get-ToolAudit {
+    param([object[]] $Events)
+    $calls = @{}
+    $denialIds = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::Ordinal)
+    $permissionDenials = @()
+    foreach ($event in @($Events)) {
+        foreach ($denial in @(ConvertTo-Array (Get-PropValue -Object $event -Name 'permission_denials'))) {
+            $permissionDenials += $denial
+            $denialId = [string](Get-PropValue -Object $denial -Name 'tool_use_id')
+            if (-not [string]::IsNullOrWhiteSpace($denialId)) { [void]$denialIds.Add($denialId) }
+        }
+        $message = Get-PropValue -Object $event -Name 'message'
+        foreach ($block in @(ConvertTo-Array (Get-PropValue -Object $message -Name 'content'))) {
+            $blockType = [string](Get-PropValue -Object $block -Name 'type')
+            if ($blockType -eq 'tool_use') {
+                $id = [string](Get-PropValue -Object $block -Name 'id')
+                if ([string]::IsNullOrWhiteSpace($id)) { continue }
+                $calls[$id] = [ordered]@{
+                    id = $id
+                    tool = [string](Get-PropValue -Object $block -Name 'name')
+                    input = Get-PropValue -Object $block -Name 'input'
+                    result_observed = $false
+                    denied = $false
+                    succeeded = $false
+                }
+            } elseif ($blockType -eq 'tool_result') {
+                $id = [string](Get-PropValue -Object $block -Name 'tool_use_id')
+                if ($calls.ContainsKey($id)) {
+                    $isError = Get-PropValue -Object $block -Name 'is_error'
+                    $calls[$id].result_observed = $true
+                    $calls[$id].succeeded = -not (($isError -eq $true) -or ([string]$isError -eq 'true'))
+                }
+            }
+        }
+    }
+    foreach ($id in @($calls.Keys)) {
+        if ($denialIds.Contains([string]$id)) {
+            $calls[$id].denied = $true
+            $calls[$id].succeeded = $false
+        }
+    }
+    $records = @($calls.Values)
+    $observedTools = @($records | ForEach-Object { $_.tool } | Select-Object -Unique)
+    $observedCommands = @()
+    $readTargets = @()
+    $writeTargets = @()
+    $editTargets = @()
+    foreach ($record in $records) {
+        $input = $record.input
+        $tool = [string]$record.tool
+        if ($tool -match '^(Bash|Shell)$') {
+            $command = [string](Get-PropValue -Object $input -Name 'command')
+            if (-not [string]::IsNullOrWhiteSpace($command)) { $observedCommands += $command }
+        }
+        $target = $null
+        foreach ($name in @('file_path', 'path')) {
+            $candidate = [string](Get-PropValue -Object $input -Name $name)
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) { $target = $candidate; break }
+        }
+        if ($tool -match '^(Read|Glob|Grep|LS)$' -and $target) { $readTargets += $target }
+        if ($tool -match '^(Write)$' -and $target) { $writeTargets += $target }
+        if ($tool -match '^(Edit|MultiEdit)$' -and $target) { $editTargets += $target }
+    }
+    return [ordered]@{
+        schema_version = 1
+        events_present = (@($Events).Count -gt 0)
+        tool_calls = @($records)
+        observed_tools = @($observedTools)
+        observed_commands = @($observedCommands)
+        permission_denials = @($permissionDenials)
+        file_targets = [ordered]@{ read = @($readTargets); write = @($writeTargets); edit = @($editTargets) }
+    }
+}
+
+function Test-TextMentionsShellCommand {
+    param([string] $Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return $Text -match '(?i)(`[^`]*(?:ls\b|test\s+-[def]|git\s+(?:status|diff)|npm\s+test|pytest|powershell|node\s+)[^`]*`|\b(?:ls\s+-|test\s+-[def]|git\s+(?:status|diff)|npm\s+test|pytest)\b)'
+}
+
+function Test-TextMentionsFileEvidence {
+    param([string] $Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return $Text -match '(?i)\b(read|inspect(?:ed)?|exist(?:s|ence)?|file|director(?:y|ies)|path|glob|grep|ls)\b|读取|检查|文件|目录|路径|存在'
 }
 
 function Protect-Text {
@@ -171,6 +281,11 @@ function New-NormalizedResult {
         [object[]] $TestsOrChecks = @(),
         [object[]] $Risks = @(),
         [object[]] $BlockedOn = @(),
+        [object[]] $ObservedTools = @(),
+        [object[]] $ObservedCommands = @(),
+        [object[]] $PermissionDenials = @(),
+        $ObservedFileTargets = $null,
+        [object[]] $AuditIssues = @(),
         [object[]] $SupervisorNotes = @(),
         [string] $ArtifactStatus = $null,
         $Cost = $null,
@@ -194,6 +309,11 @@ function New-NormalizedResult {
         tests_or_checks = @($TestsOrChecks)
         risks = @($Risks)
         blocked_on = @($BlockedOn)
+        observed_tools = @($ObservedTools)
+        observed_commands = @($ObservedCommands)
+        permission_denials = @($PermissionDenials)
+        observed_file_targets = $ObservedFileTargets
+        audit_issues = @($AuditIssues)
         supervisor_notes = @($SupervisorNotes)
         artifact_status = $ArtifactStatus
         cost = $Cost
@@ -348,7 +468,9 @@ $runInfo = New-RunDirectory -AgentsRoot $agentsRoot -ProjectRoot $projectRoot -R
 $runId = $runInfo.runId
 $runDir = $runInfo.runDir
 $stdoutPath = Join-Path $runDir 'claude-output.json'
+$eventStreamPath = Join-Path $runDir 'claude-events.jsonl'
 $stderrPath = Join-Path $runDir 'claude-error.txt'
+$toolEventsPath = Join-Path $runDir 'tool-events.json'
 $script:resolvedAllowDirs = @()
 $script:resolvedContextFiles = @()
 Save-Json -Value ([ordered]@{ runId = $runId; mode = $Mode; projectRoot = $projectRoot; startedAt = (Get-Date).ToString('o'); status = 'in_progress' }) -Path (Join-Path $runDir 'in_progress.json') -Depth 5
@@ -482,8 +604,9 @@ Required response shape:
 
     $claudeArgs = @()
     if ($effectiveBare) { $claudeArgs += '--bare' }
-    $claudeArgs += @('-p', '--permission-mode', [string]$modePolicy.permissionMode, '--output-format', [string]$modePolicy.outputFormat, '--max-budget-usd', ([string]$BudgetUsd), '--system-prompt', $systemPrompt)
+    $claudeArgs += @('-p', '--permission-mode', [string]$modePolicy.permissionMode, '--output-format', 'stream-json', '--verbose', '--max-budget-usd', ([string]$BudgetUsd), '--system-prompt', $systemPrompt)
     if ($modePolicy.allowedTools -and $modePolicy.allowedTools.Count -gt 0) { $claudeArgs += '--allowedTools'; $claudeArgs += ($modePolicy.allowedTools -join ',') }
+    if ($modePolicy.disallowedTools -and $modePolicy.disallowedTools.Count -gt 0) { $claudeArgs += '--disallowedTools'; $claudeArgs += ($modePolicy.disallowedTools -join ',') }
     if ($Model) { $claudeArgs += '--model'; $claudeArgs += $Model }
     foreach ($dir in $resolvedAllowDirs) { $claudeArgs += '--add-dir'; $claudeArgs += $dir }
     $commandLinePreview = 'claude ' + (($claudeArgs | ForEach-Object { if ($_ -match '\s') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' ') + ' < prompt.txt'
@@ -554,14 +677,20 @@ Required response shape:
         $claudeExitCode = [int]$jobResult.exitCode
         $output = @($jobResult.output)
     }
-    Write-Utf8Text -Path $stdoutPath -Text ($output -join [Environment]::NewLine)
+    Write-Utf8Text -Path $eventStreamPath -Text ($output -join [Environment]::NewLine)
 
     $status = if ($claudeExitCode -eq 0) { 'success' } else { 'worker_failed' }
     $parseInfo = ConvertFrom-ClaudeCliText ($output | Out-String)
     $parsed = $parseInfo.parsed
     $workerResult = $parseInfo.worker
+    $streamEvents = @($parseInfo.events)
     $parseError = $parseInfo.parseError
     $recoveredWorkerOutput = [bool]$parseInfo.recovered
+    if ($null -ne $parsed) {
+        Save-Json -Value $parsed -Path $stdoutPath -Depth 20
+    } else {
+        Write-Utf8Text -Path $stdoutPath -Text ($output -join [Environment]::NewLine)
+    }
     if ($parseError -and -not $recoveredWorkerOutput -and $status -eq 'success') { $status = 'worker_failed' }
     $subtype = Get-PropValue -Object $parsed -Name 'subtype'
     if (-not $subtype) { $subtype = Get-PropValue -Object $workerResult -Name 'subtype' }
@@ -575,7 +704,7 @@ Required response shape:
     if (-not $summaryValue) { $summaryValue = Get-PropValue -Object $workerResult -Name 'response' }
     if (-not $summaryValue) { $summaryValue = Get-PropValue -Object $workerResult -Name 'text' }
     if (-not $summaryValue) { $summaryValue = Get-PropValue -Object $workerResult -Name 'content' }
-    $summary = ConvertTo-ShortText $summaryValue
+    $summary = if ($recoveredWorkerOutput) { ConvertTo-ShortText $summaryValue } else { ConvertTo-FullText $summaryValue }
     if (-not $summary) {
         $summary = if ($status -eq 'success') { 'Worker completed successfully.' } else { 'Claude worker failed or returned invalid JSON.' }
     }
@@ -594,6 +723,13 @@ Required response shape:
     $changesMade = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'changes_made'))
     $commandsRun = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'commands_run'))
     $testsOrChecks = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'tests_or_checks'))
+    $toolAudit = Get-ToolAudit -Events $streamEvents
+    Save-Json -Value $toolAudit -Path $toolEventsPath -Depth 20
+    $successfulCalls = @($toolAudit.tool_calls | Where-Object { $_.succeeded -eq $true -and $_.denied -ne $true })
+    $successfulTools = @($successfulCalls | ForEach-Object { $_.tool } | Select-Object -Unique)
+    $successfulCommands = @($successfulCalls | Where-Object { $_.tool -match '^(Bash|Shell)$' } | ForEach-Object { [string](Get-PropValue -Object $_.input -Name 'command') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $successfulReadCalls = @($successfulCalls | Where-Object { $_.tool -match '^(Read|Glob|Grep|LS)$' })
+    $successfulWriteCalls = @($successfulCalls | Where-Object { $_.tool -match '^(Write|Edit|MultiEdit)$' })
     $auditIssues = @()
     foreach ($requiredField in @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on')) {
         if (-not (Test-PropExists -Object $workerResult -Name $requiredField)) {
@@ -612,6 +748,55 @@ Required response shape:
         }
         if (($Mode -eq 'run') -and ($testsOrChecks.Count -eq 0)) {
             $auditIssues += 'missing_test_or_check_evidence'
+        }
+        if ($changesMade.Count -eq 0 -and $successfulWriteCalls.Count -gt 0) {
+            $auditIssues += 'file_audit_mismatch:observed_write_not_reported'
+        }
+        if ($changesMade.Count -gt 0 -and $successfulWriteCalls.Count -eq 0) {
+            $auditIssues += 'file_audit_mismatch:reported_change_not_observed'
+        }
+        if ($commandsRun.Count -eq 0 -and $successfulCommands.Count -gt 0) {
+            $auditIssues += 'command_audit_mismatch:observed_shell_command_not_reported'
+        }
+        foreach ($reportedCommand in $commandsRun) {
+            $reported = [string]$reportedCommand
+            if (-not ($successfulCommands | Where-Object { $_ -eq $reported -or $_ -like "*$reported*" -or $reported -like "*$_*" })) {
+                $auditIssues += 'command_audit_mismatch:reported_command_not_observed'
+                break
+            }
+        }
+        foreach ($reportedFile in $filesRead) {
+            $reported = ([string]$reportedFile).Replace('\', '/').TrimStart('./')
+            $matched = $false
+            foreach ($call in $successfulReadCalls) {
+                foreach ($field in @('file_path', 'path')) {
+                    $target = ([string](Get-PropValue -Object $call.input -Name $field)).Replace('\', '/').TrimStart('./')
+                    if ($target -and ($target -eq $reported -or $target.EndsWith('/' + $reported) -or $reported.EndsWith('/' + $target))) { $matched = $true }
+                }
+            }
+            if (-not $matched) { $auditIssues += 'file_audit_mismatch:reported_file_read_not_observed'; break }
+        }
+        foreach ($checkValue in $testsOrChecks) {
+            $check = [string]$checkValue
+            $verified = $true
+            if (Test-TextMentionsShellCommand $check) {
+                $verified = $false
+                if ($check -match '(?i)\bls\b' -and ($successfulTools -contains 'LS')) { $verified = $true }
+                if (-not $verified -and ($successfulCommands | Where-Object {
+                    ($check -match '(?i)\bls\b' -and $_ -match '(?i)\bls\b') -or
+                    ($check -match '(?i)test\s+-[def]' -and $_ -match '(?i)test\s+-[def]') -or
+                    ($check -match '(?i)git\s+status' -and $_ -match '(?i)git\s+status') -or
+                    ($check -match '(?i)git\s+diff' -and $_ -match '(?i)git\s+diff')
+                })) { $verified = $true }
+            } elseif (Test-TextMentionsFileEvidence $check) {
+                $verified = $successfulReadCalls.Count -gt 0
+            } elseif ($successfulCalls.Count -eq 0) {
+                $verified = $false
+            }
+            if (-not $verified) { $auditIssues += 'unverifiable_check_evidence'; break }
+        }
+        if ($toolAudit.permission_denials.Count -gt 0 -and $testsOrChecks.Count -gt 0 -and $successfulCalls.Count -eq 0) {
+            if ($auditIssues -notcontains 'unverifiable_check_evidence') { $auditIssues += 'unverifiable_check_evidence' }
         }
     }
     if ($status -eq 'success' -and $auditIssues.Count -gt 0) {
@@ -655,9 +840,14 @@ Required response shape:
         -TestsOrChecks $testsOrChecks `
         -Risks $risksFromWorker `
         -BlockedOn $blockedOn `
+        -ObservedTools @($toolAudit.observed_tools) `
+        -ObservedCommands @($toolAudit.observed_commands) `
+        -PermissionDenials @($toolAudit.permission_denials) `
+        -ObservedFileTargets $toolAudit.file_targets `
+        -AuditIssues $auditIssues `
         -SupervisorNotes $supervisorNotes `
         -ArtifactStatus $artifactStatus `
-        -Cost $cost -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_error = $stderrPath } -ErrorObject $err
+        -Cost $cost -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_events = $eventStreamPath; raw_error = $stderrPath; tool_events = $toolEventsPath } -ErrorObject $err
     Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status $status -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath -ClaudeExitCode $claudeExitCode
 } catch {
     $message = $_.Exception.Message

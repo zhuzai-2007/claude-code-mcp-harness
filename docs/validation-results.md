@@ -168,3 +168,12 @@ A second real read-only plan verified the encoding fix with an exact Unicode ass
 - `files_read` was populated and no changes were reported.
 
 These results pass the hardened synchronous read and bounded-write gates. Write mode remains supervised because the current product still lacks the durable asynchronous approval and recovery layer.
+
+## Dogfood result and tool audit hardening (2026-07-12)
+
+- Strict Worker summaries longer than 300 characters are preserved without silent truncation in `worker-result.normalized.json` and `cc_get_result`.
+- Real Worker calls request Claude Code `stream-json` with verbose events. Runs persist the original `claude-events.jsonl` plus derived `tool-events.json`.
+- Self-reported checks without successful tool events, unreported observed shell commands, unmatched file reads, and denied tool calls now fail as `audit_validation_failed` with specific entries in `audit_issues`.
+- Fixture coverage includes long summaries, absent-event command claims, an observed LS success, an unreported Bash command, a permission denial, and an unmatched file-read claim.
+- A bounded live CLI probe confirmed the installed Claude Code 2.1.201 JSONL envelope behavior, but the configured provider exhausted retries before producing a real tool call. Tool block parsing therefore follows Claude Code's documented message content contract and remains covered by deterministic fixtures; a final provider-backed read/write revalidation is still required after the Bridge is restarted.
+- A later provider-backed attempt produced real `Read`, `Bash`, `tool_result`, and permission-denial events. It also proved that `--allowedTools` is not an exclusive allowlist, so the Harness now passes explicit `--disallowedTools`; run mode denies Bash. The real write was rejected because the Worker violated the strict JSON contract and used Bash, and the temporary marker was removed. Final hardened ChatGPT write revalidation remains pending.

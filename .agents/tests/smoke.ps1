@@ -84,6 +84,8 @@ try {
     $utf8Artifacts = @(
         (Join-Path $unicodeRunDir 'worker-result.normalized.json'),
         (Join-Path $unicodeRunDir 'claude-output.json'),
+        (Join-Path $unicodeRunDir 'claude-events.jsonl'),
+        (Join-Path $unicodeRunDir 'tool-events.json'),
         (Join-Path $unicodeRunDir 'prompt.txt'),
         (Join-Path $unicodeRunDir 'system-prompt.txt')
     )
@@ -92,7 +94,43 @@ try {
         ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
     })
 } catch { $noBomOk = $false }
-Add-Result 'utf8-artifacts-have-no-bom' $noBomOk "checked normalized output, raw output, prompt, and system prompt"
+Add-Result 'utf8-artifacts-have-no-bom' $noBomOk "checked normalized output, raw output, tool events, prompt, and system prompt"
+
+function Invoke-FixtureScenario {
+    param([string] $Scenario, [string] $Task)
+    try {
+        $previousPath = $env:PATH
+        $previousScenario = $env:CLAUDE_TASK_FIXTURE_SCENARIO
+        $env:PATH = $fixtureDir + [System.IO.Path]::PathSeparator + $previousPath
+        $env:CLAUDE_TASK_FIXTURE_SCENARIO = $Scenario
+        $fixtureRunId = New-TestRunId
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task $Task -NoBare -RunId $fixtureRunId *> $null
+        $fixtureExit = $LASTEXITCODE
+    } finally {
+        $env:PATH = $previousPath
+        $env:CLAUDE_TASK_FIXTURE_SCENARIO = $previousScenario
+    }
+    $fixtureJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $fixtureRunId -Json 2>&1 | Out-String
+    return [pscustomobject]@{ exitCode = $fixtureExit; result = ($fixtureJson | ConvertFrom-Json); runId = $fixtureRunId }
+}
+
+$longSummary = Invoke-FixtureScenario -Scenario 'long-summary' -Task 'return a long strict JSON summary after inspecting files'
+Add-Result 'strict-long-summary-preserved' (($longSummary.exitCode -eq 0) -and ($longSummary.result.summary.Length -gt 300) -and $longSummary.result.summary.EndsWith('丙丁')) "exit=$($longSummary.exitCode) length=$($longSummary.result.summary.Length)"
+
+$unverifiable = Invoke-FixtureScenario -Scenario 'claimed-commands-no-events' -Task 'claim shell checks without tool events'
+Add-Result 'claimed-checks-without-events-fail' (($unverifiable.exitCode -eq 1) -and ($unverifiable.result.error.code -eq 'audit_validation_failed') -and ($unverifiable.result.error.message -match 'unverifiable_check_evidence')) "exit=$($unverifiable.exitCode) error=$($unverifiable.result.error.message)"
+
+$lsObserved = Invoke-FixtureScenario -Scenario 'ls-observed' -Task 'check a directory with LS'
+Add-Result 'ls-event-validates-check' (($lsObserved.exitCode -eq 0) -and ($lsObserved.result.observed_tools -contains 'LS')) "exit=$($lsObserved.exitCode) observed=$($lsObserved.result.observed_tools -join ',')"
+
+$bashMismatch = Invoke-FixtureScenario -Scenario 'bash-unreported' -Task 'inspect git state'
+Add-Result 'observed-bash-must-be-reported' (($bashMismatch.exitCode -eq 1) -and ($bashMismatch.result.error.message -match 'command_audit_mismatch')) "exit=$($bashMismatch.exitCode) error=$($bashMismatch.result.error.message)"
+
+$deniedCheck = Invoke-FixtureScenario -Scenario 'permission-denial' -Task 'read a file and report the check'
+Add-Result 'permission-denial-is-not-check-evidence' (($deniedCheck.exitCode -eq 1) -and ($deniedCheck.result.error.message -match 'unverifiable_check_evidence') -and ($deniedCheck.result.permission_denials.Count -eq 1)) "exit=$($deniedCheck.exitCode) denials=$($deniedCheck.result.permission_denials.Count)"
+
+$fileMismatch = Invoke-FixtureScenario -Scenario 'file-read-unreported-by-events' -Task 'claim a file read without an event'
+Add-Result 'reported-file-read-must-be-observed' (($fileMismatch.exitCode -eq 1) -and ($fileMismatch.result.error.message -match 'file_audit_mismatch')) "exit=$($fileMismatch.exitCode) error=$($fileMismatch.result.error.message)"
 
 try {
     $previousPath = $env:PATH
@@ -131,6 +169,13 @@ Add-Result 'ledger-readable' $ledgerOk "exit=$ledgerExit"
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File $script run -Task 'write a file' -DryRun *> $null
 Add-Result 'run-without-approval-blocked' ($LASTEXITCODE -eq 2) "exit=$LASTEXITCODE"
+
+$runDryId = New-TestRunId
+& powershell -NoProfile -ExecutionPolicy Bypass -File $script run -Task 'write one file without shell commands' -ApprovedBy 'smoke-test' -ApprovalReason 'Inspect generated CLI restrictions.' -DryRun -RunId $runDryId *> $null
+$runDryExit = $LASTEXITCODE
+$runDryResult = (& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $runDryId -Json 2>&1 | Out-String) | ConvertFrom-Json
+$runDryCommand = Get-Content -LiteralPath $runDryResult.artifacts.command -Raw -Encoding UTF8
+Add-Result 'run-bash-is-cli-disallowed' (($runDryExit -eq 0) -and ($runDryCommand -match '--disallowedTools\s+Bash')) "exit=$runDryExit disallowed=$($runDryCommand -match '--disallowedTools\s+Bash')"
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task 'please run git push' -DryRun *> $null
 Add-Result 'git-push-blocked' ($LASTEXITCODE -eq 2) "exit=$LASTEXITCODE"
