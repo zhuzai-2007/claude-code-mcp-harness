@@ -33,6 +33,7 @@ try {
   }
   const writeTool = listed.tools.find((tool) => tool.name === "cc_run_approved_task");
   assert(writeTool?.annotations?.readOnlyHint === false, "cc_run_approved_task is not marked as write-capable");
+  assert(writeTool?.annotations?.destructiveHint === true, "cc_run_approved_task does not advertise overwrite risk");
 
   const ping = await client.callTool({ name: "cc_ping", arguments: {} });
   assert(ping.structuredContent?.ok === true, "cc_ping did not report ok=true");

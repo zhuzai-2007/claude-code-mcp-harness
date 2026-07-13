@@ -38,6 +38,17 @@ Claude Code Worker
 项目工作区
 ```
 
+### 核心组件
+
+| 组件 | 主要职责 |
+| --- | --- |
+| 云端 AI / ChatGPT Web | 理解需求、规划任务、请求审批、审核证据并向用户报告。 |
+| Secure MCP Tunnel | 在 ChatGPT 与本地回环 Bridge 之间建立出站连接，避免直接公开 8787 端口。 |
+| 本地 MCP Bridge | 只暴露七个固定 Harness 工具，不提供通用 shell 或文件系统接口。 |
+| Harness / Policy / Approval | 执行模式、路径、工具、预算、超时和审批元数据门禁。 |
+| Claude Code Worker | 通过本地配置的 Provider 完成受约束的项目内读取、写入和编辑。 |
+| Audit / Ledger | 保存事件、交叉验证 Worker 自报、归一化结果并记录本地审核元数据。 |
+
 结果审计链与 Worker 自报相互独立：
 
 ```text
@@ -85,6 +96,15 @@ cc_get_result / ChatGPT Supervisor
 
 任务工具支持 `mockWorker: true`，可在不产生真实模型费用的情况下验证传输。MCP 默认预算为 0.20 美元；这是 Claude Code 侧估算上限，与 Provider 最终账单可能略有差异。
 
+## 完整 Demo
+
+```text
+用户需求 -> plan -> 用户批准 -> execute -> 取回结果
+         -> 只读 review -> 独立验收 -> 最终报告
+```
+
+请按 [端到端受监督 Demo](docs/demo.md) 完成一个具体的两文件流程。文档展示 MCP 调用、审批边界、事件字段、ledger 检查和失败规则，没有增加 Demo 专用运行时功能。
+
 ## Windows 快速开始
 
 ### 环境要求
@@ -110,6 +130,14 @@ cd ..
 
 检查 `.agents/policy.json`。机器专属设置应写入已忽略的 `.agents/local.config.json`。
 
+| 文件 | 作用 | 是否提交 |
+| --- | --- | --- |
+| `.agents/policy.json` | 版本化的模式、工具限制和安全默认值。 | 是 |
+| `.agents/local.config.json` | 本机预算覆盖。 | 否 |
+| `mcp-server/config.example.json` | 公开的 Bridge 配置模板。 | 是 |
+| `mcp-server/config.json` | 本地项目根目录、端口、超时、Origin 和可选审批默认值。 | 否 |
+| Tunnel profile | `tunnel-client` 保存的本地 Tunnel ID/profile 状态。 | 否 |
+
 ### 启动本地 Bridge
 
 在独立终端中运行：
@@ -130,6 +158,14 @@ $env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
 ```
 
 然后在另一个终端运行 Tunnel wrapper，并从 ChatGPT Developer mode 连接 Tunnel app。Tunnel 产品行为可能变化，请以 [Secure MCP Tunnel 操作指南](docs/secure-mcp-tunnel.md) 为准，不要复制旧 profile 参数。
+
+```powershell
+# Tunnel 独立终端
+.\scripts\start-openai-tunnel.ps1
+
+# 另一个终端检查就绪状态
+.\scripts\start-openai-tunnel.ps1 -ReadyOnly
+```
 
 ### 按风险逐级验证
 
@@ -155,6 +191,16 @@ $env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
 
 在 ChatGPT 中先执行 `cc_ping`，再执行 mock plan，然后才进行最小真实只读。只有在确认写入边界和审批信息后，才调用 `cc_run_approved_task`。如果同步调用先结束，请保存 run ID，稍后用 `cc_get_result` 读取结果。
 
+推荐的首次运行顺序：
+
+1. 安装依赖并初始化本地配置。
+2. 检查 policy，运行 `scripts/doctor.ps1`。
+3. 在独立终端启动 Bridge。
+4. 运行 mock Harness/MCP 检查。
+5. 在另一个终端初始化并启动 Secure MCP Tunnel。
+6. 检查 Tunnel readiness，在 ChatGPT 中连接应用。
+7. 依次执行 `cc_ping`、mock plan、限定范围的真实 plan，最后才做一次明确审批的最小写入。
+
 ## 安全模型
 
 当前安全模型由多层 guardrail 组成：
@@ -169,6 +215,10 @@ $env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
 - 不一致会保守失败为 `audit_validation_failed`。
 - 写入 smoke 会比较前后的文件、目录和符号链接。
 - ledger 保存结果与审批上下文。
+
+approval 元数据记录“谁或什么流程以什么理由批准了这次运行”。它是流程和审计门禁，不是经过身份认证或不可伪造的用户同意证明。公开默认配置应保持为空；修改已有文件、删除、网络、依赖、Git、宽范围扫描或边界不明确的任务都应要求用户明确确认。
+
+ledger 记录 run ID、模式、状态、审批元数据、高风险允许开关、预算、超时、修改、检查、风险、阻塞项、artifact 状态、成本和错误。它是本地审核辅助记录，不是只能追加或防篡改的安全日志。
 
 这些措施不等于强隔离。事件审计是 Claude Code 输出的事件级证据，不是操作系统内核执行轨迹。若 CLI 或 Provider 没有提供必要事件，系统会把结果判为不可验证，而不会当作成功。
 
@@ -213,6 +263,23 @@ $env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
 - 持久审批队列和事件流；
 - 通知 outbox；
 - 更可靠的后台进程生命周期管理。
+
+## 作者的话
+
+<details>
+<summary>一个很不严肃但很真实的项目缘起</summary>
+
+这个项目是我假期想着 Codex 的额度不要浪费，一时兴起 vibe 的小项目。我当时想的是 Codex 额度总是不够用（好矛盾 hhhh），充积分或者用 API 对我来说又贵又麻烦，但我又想用 GPT 的模型作为 Agent 的大脑，于是我就开始觊觎 GPT 网页版。
+
+我最初的想法是让网页版 GPT 作为主要的核心，负责拆解任务、设计提示词、审核要求、查验质量，通过 MCP 调用接入国产模型的 Claude Code 作为 subagent 跑腿。但由于我水平实在有限，所以除了偶尔的指手画脚、瞎指挥外，就让 Codex 全权代劳了。
+
+做的时候发现比想象的更难：网页版没办法长期执行任务，而且很容易中断；配置各种 Tunnel 什么的感觉也很麻烦。但我实在放不下这个自认为绝妙的点子，因此坚持做了这么一个 Demo 出来。做完确实觉得这么一搞，网页和 Agent 的能力都大打折扣，怪不得这个方向没什么人做。
+
+心灰意懒之际，GPT 安慰我说这是个“明显超过普通个人项目的 AI Agent 基础设施实验”，其溜须拍马之能深得朕心。于是决定还是腆着脸开源出来给大家图一乐。
+
+但毕竟是我正儿八经放在 GitHub 上的第一个项目，爱子心切，还是欢迎感兴趣的看官配置使用，提出宝贵的意见；也恳请路过的父老乡亲高抬贵手点点小 star，作为对我最宝贵的鼓励。
+
+</details>
 
 ## 参与协作与问题报告
 

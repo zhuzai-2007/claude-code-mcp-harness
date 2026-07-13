@@ -8,6 +8,8 @@ The user should provide a high-level goal in normal language. The user does not 
 
 ChatGPT is responsible for translating the goal into the correct MCP tool calls, worker prompt, approval text, and follow-up result checks.
 
+Approval metadata is a workflow and audit record, not authenticated or cryptographic proof of human consent. Keep Bridge approval defaults null unless the local operator deliberately accepts an auto-approval policy.
+
 ## Natural-Language Request Translation
 
 Most user requests are ordinary prompts, not full specifications. Before invoking the worker, ChatGPT/Codex must create a bounded task brief:
@@ -65,6 +67,8 @@ After every worker run, ChatGPT must call:
 1. `cc_get_latest_summary`
 2. `cc_get_result` with `runId = "latest"`
 3. `cc_get_ledger` when using the MCP bridge, or `.\.agents\ledger.ps1 -Tail 5` when using PowerShell directly
+
+The ledger records run metadata and evidence for local review. It is not append-only, tamper-proof, or a substitute for an operating-system audit log.
 
 ChatGPT should use the normalized result as the primary source of truth. If the normalized result reports failure, timeout, policy blocking, invalid input, or incomplete output, ChatGPT must report that state clearly instead of assuming success.
 

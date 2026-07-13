@@ -38,6 +38,17 @@ Claude Code Worker
 Project workspace
 ```
 
+### Core components
+
+| Component | Responsibility |
+| --- | --- |
+| Cloud AI / ChatGPT Web | Interpret requirements, plan work, request approval, review evidence, and report results. |
+| Secure MCP Tunnel | Carry the outbound connection between ChatGPT and the loopback Bridge without directly publishing port 8787. |
+| Local MCP Bridge | Expose seven fixed Harness tools; it is not a generic shell or filesystem server. |
+| Harness / Policy / Approval | Enforce mode, path, tool, budget, timeout, and approval-metadata gates. |
+| Claude Code Worker | Perform bounded project-local reads, writes, and edits through the configured provider. |
+| Audit / Ledger | Persist stream events, cross-validate Worker claims, normalize results, and retain local review metadata. |
+
 The audit return path is separate from the Worker's self-report:
 
 ```text
@@ -85,6 +96,15 @@ The local dogfood flow has created a static Chinese task board through an approv
 
 Task tools accept `mockWorker: true` for transport tests without a paid Worker call. The default MCP budget is USD 0.20; it is an estimated Claude Code-side limit and can differ slightly from provider billing.
 
+## End-to-end demo
+
+```text
+user request -> plan -> user approval -> execute -> result recovery
+             -> read-only review -> independent acceptance -> final report
+```
+
+Follow the concrete two-file walkthrough in [End-to-End Supervised Demo](docs/demo.md). It shows the MCP calls, approval boundary, event fields, ledger check, and failure rules without adding Demo-only runtime features.
+
 ## Quick start on Windows
 
 ### Requirements
@@ -110,6 +130,14 @@ cd ..
 
 Review `.agents/policy.json`. Keep machine-specific overrides in ignored `.agents/local.config.json`.
 
+| File | Purpose | Commit it? |
+| --- | --- | --- |
+| `.agents/policy.json` | Versioned modes, tool restrictions, and safety defaults. | Yes |
+| `.agents/local.config.json` | Machine-local budget override. | No |
+| `mcp-server/config.example.json` | Public Bridge configuration template. | Yes |
+| `mcp-server/config.json` | Local project root, port, timeout, origins, and optional approval defaults. | No |
+| Tunnel profile | Local Tunnel ID/profile state maintained by `tunnel-client`. | No |
+
 ### Start the local Bridge
 
 Run the loopback Bridge in a dedicated terminal:
@@ -130,6 +158,14 @@ $env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
 ```
 
 Then run the Tunnel wrapper in a separate terminal and connect the Tunnel app from ChatGPT Developer mode. Tunnel behavior can change; follow [the maintained Secure MCP Tunnel guide](docs/secure-mcp-tunnel.md) instead of copying old profile details.
+
+```powershell
+# Dedicated Tunnel terminal
+.\scripts\start-openai-tunnel.ps1
+
+# Separate readiness check
+.\scripts\start-openai-tunnel.ps1 -ReadyOnly
+```
 
 ### Validate progressively
 
@@ -155,6 +191,16 @@ Then run the Tunnel wrapper in a separate terminal and connect the Tunnel app fr
 
 From ChatGPT, start with `cc_ping`, then a mock plan, then a minimal real read-only task. Use `cc_run_approved_task` only after reviewing the exact write boundary and approval metadata. If a synchronous tool call ends before the Worker, retain the run ID and call `cc_get_result` later.
 
+Recommended first-run order:
+
+1. Install dependencies and initialize local config.
+2. Review policy and run `scripts/doctor.ps1`.
+3. Start the Bridge in a dedicated terminal.
+4. Run the mock Harness/MCP checks.
+5. Initialize and start Secure MCP Tunnel in another terminal.
+6. Check Tunnel readiness and connect the ChatGPT app.
+7. Run `cc_ping`, mock plan, bounded real plan, and finally one explicitly approved minimal write.
+
 ## Safety model
 
 The safety model is layered:
@@ -169,6 +215,10 @@ The safety model is layered:
 - mismatches fail conservatively as `audit_validation_failed`;
 - write smoke tests compare files, directories, and symbolic links before and after execution;
 - the local ledger records results and approval context.
+
+Approval metadata records who or what authorized a run and why. It is a workflow and audit gate, not authenticated or cryptographic proof of human consent. Keep public defaults null and require explicit user confirmation for existing-file edits, deletion, network, dependencies, Git, broad scans, or ambiguous boundaries.
+
+The ledger records run ID, mode, status, approval metadata, allowed high-risk switches, budget, timeout, changes, checks, risks, blocked items, artifact status, cost, and errors. It is a local review aid, not an append-only or tamper-proof security log.
 
 These are guardrails, not strong isolation. Event auditing is evidence emitted by Claude Code, not an OS-kernel execution trace. If a CLI or provider omits required events, the result is treated as unverifiable rather than successful.
 
@@ -213,6 +263,23 @@ Evidence and scope are documented in [validation results](docs/validation-result
 - a durable approval queue and event stream;
 - a notification outbox;
 - better background-process lifecycle management.
+
+## Author's note
+
+<details>
+<summary>A very personal note on why this project exists</summary>
+
+This started as a holiday vibe-coding project because I did not want my Codex allowance to go to waste. My contradictory complaint was that the allowance never felt sufficient, while buying credits or using APIs felt expensive and inconvenient. I still wanted a GPT model to act as the agent's decision-making center, so I started eyeing ChatGPT Web as the main interface.
+
+The original idea was to let a web GPT break down tasks, design Worker prompts, review requirements, and inspect quality, then use MCP to send execution work to Claude Code backed by lower-cost domestic models. My own engineering level was limited, so apart from occasional back-seat directing, I let Codex do most of the implementation.
+
+It turned out to be harder than expected. A web conversation cannot keep running indefinitely, interruptions are common, and Tunnel configuration adds friction. I still could not let go of what I thought was a brilliant idea, so I kept going until this Demo existed. The finished system does reduce some convenience and capability on both sides, which perhaps explains why this direction is uncommon.
+
+When I was discouraged, GPT comforted me by calling it "an AI Agent infrastructure experiment clearly beyond an ordinary personal project." Its talent for flattering the operator was impressive enough that I decided to publish the project anyway. This is my first serious GitHub project, so suggestions, experiments, bug reports, and a small star from interested visitors would genuinely mean a great deal to me.
+
+The full original Chinese note is available in [README.zh-CN.md](README.zh-CN.md#作者的话).
+
+</details>
 
 ## Contributing and reporting issues
 

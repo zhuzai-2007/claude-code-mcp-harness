@@ -1,41 +1,43 @@
 # Worker Harness Status
 
-Version: v0.1
+Version: v0.1.1-alpha
 
-Status: usable
+Status: dogfood-validated synchronous Alpha; not production-ready.
 
-## v0.1 Capabilities
+## Current Capabilities
 
-- `plan`, `run`, and `review` modes.
-- Approval gate for `run` mode through `-ApprovedBy` and `-ApprovalReason`.
-- Standard result classes: `success`, `policy_blocked`, `invalid_input`, `worker_failed`, and `environment_failed`.
-- Stable machine-readable output in `worker-result.normalized.json`.
-- Timeout handling that writes `result.json`, `worker-result.normalized.json`, and `claude-error.txt`.
-- `summary.ps1` can read latest runs and incomplete runs.
-- `approved-demo.ps1` validates an approved minimal edit flow.
-- `install.ps1` supports portable installation into another project.
-- JSON CLI boundary is stable enough for a future thin MCP wrapper.
+- `plan`, `run`, and `review` worker modes.
+- A Streamable HTTP MCP Bridge with fixed plan, review, approved-run, summary, result, and ledger tools.
+- Approval metadata gate for `run` mode through `ApprovedBy` and `ApprovalReason`.
+- Project-root, external-directory, tool, budget, and timeout boundaries.
+- Claude Code `stream-json` capture and independent tool-event auditing.
+- Cross-validation of Worker claims against successful, non-denied tool results.
+- Stable normalized results and run-ID recovery.
+- Portable Harness installation and Secure MCP Tunnel integration.
 
-## Known Non-Blocking Items
+## Important Boundaries
 
-- The current test directory has an invalid `.git` state. This was intentionally not repaired.
-- `.agents/runs` has had ACL/fallback issues in this environment. Fallback to `.agent-runs` is available and working.
-- Claude CLI non-interactive calls depend on current authentication, API, and provider availability. Before use, confirm `claude -p "Return exactly OK and nothing else."` returns `OK`.
-- Human-readable `summary.ps1` output can be polished later. Machine-readable normalized results are the reliable interface.
+- Approval metadata is a workflow and audit gate, not cryptographic proof of human consent.
+- The ledger is a local review aid, not an append-only or tamper-proof security log.
+- MCP annotations, prompts, policy, approval fields, and event auditing are defense-in-depth guardrails; none is a standalone sandbox.
+- Live behavior depends on the Claude CLI, provider, terminal trust, and event completeness.
+- Synchronous browser calls may time out before the Worker; recover by run ID with `cc_get_result`.
+- Phase B queues, leases, runtime approvals, notifications, and automatic recovery are not implemented.
 
-## Final Acceptance Commands
+## Release Checks
 
 ```powershell
-claude -p "Return exactly OK and nothing else."
-.\.agents\approved-demo.ps1 -WorkerTimeoutSeconds 300
-.\.agents\summary.ps1 -RunId latest -IncludeIncomplete
 .\.agents\tests\smoke.ps1
-.\.agents\claude-task.ps1 run -Task "Return slowly enough to trigger timeout." -ApprovedBy Codex -ApprovalReason "timeout regression" -WorkerTimeoutSeconds 1
+.\scripts\test-mcp-protocol.ps1
+.\scripts\scan-doc-hygiene.ps1
+.\scripts\validate-skill-lite.ps1
 ```
 
-## Freeze Notes
+Run real plan/write acceptance only in an operator-controlled environment with the intended provider and the smallest practical budget.
+
+## Safety Invariants
 
 - Do not use `--dangerously-skip-permissions` or `bypassPermissions`.
-- Do not treat this harness as an OS-level sandbox. It is a policy and workflow boundary.
-- Do not implement an MCP server or HTTP server in v0.1.
-- Current harness is marked as v0.1 usable.
+- Do not treat this Harness as an OS-level sandbox.
+- Do not expose the loopback Bridge directly to unauthenticated public ingress.
+- Do not treat Worker self-reporting as sufficient acceptance evidence.

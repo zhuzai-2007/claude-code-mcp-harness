@@ -361,7 +361,7 @@ function createServer() {
         maxBudgetUsd: z.number().positive().max(5).optional(),
         mockWorker: z.boolean().optional()
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     async (input = {}) => {
       const { prompt, approvedBy, approvalReason, workerTimeoutSeconds } = input;
