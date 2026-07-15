@@ -9,10 +9,13 @@ mcp-server/.server-test.*.log
 .agents/local.config.json
 .agents/policy.json.backup-*
 .agent-runs/
+runtime-data/
 outbox/
 logs/
 workspace/*
 !workspace/.gitkeep
+!workspace/supervisor-dashboard/
+!workspace/supervisor-dashboard/**
 docs/natural-language-smoke-results.md
 .env*
 .claude/

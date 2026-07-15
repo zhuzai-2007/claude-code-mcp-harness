@@ -35,6 +35,20 @@ jobs:
           node --check .\mcp-server\smoke-client.mjs
           node --check .\mcp-server\side-effect-guard.mjs
           node .\mcp-server\side-effect-guard.test.mjs
+          node .\mcp-server\resource-profile-input.test.mjs
+          node .\runtime\task-runtime.test.mjs
+          node .\runtime\workflow-planner.test.mjs
+          node .\runtime\workflow-runtime.test.mjs
+          node .\runtime\supervisor-brain.test.mjs
+          node .\runtime\runtime-retention.test.mjs
+          node .\runtime\harness-runner.test.mjs
+          node .\mcp-server\supervisor-dashboard-routes.test.mjs
+          node .\mcp-server\supervisor-product-view.test.mjs
+      - name: Product startup check
+        shell: pwsh
+        run: |
+          .\scripts\init-config.ps1
+          .\start.ps1 -SkipDoctor -CheckOnly
       - name: MCP protocol smoke
         shell: pwsh
         run: .\scripts\test-mcp-protocol.ps1
@@ -44,6 +58,9 @@ jobs:
       - name: Documentation hygiene
         shell: pwsh
         run: .\scripts\scan-doc-hygiene.ps1
+      - name: Release baseline
+        shell: pwsh
+        run: .\scripts\check-release-baseline.ps1
       - name: Skill harness verification
         shell: pwsh
         run: .\skills\codex-claude-worker\scripts\verify-harness.ps1 -ProjectRoot . -MockWorker

@@ -1,14 +1,23 @@
 {
   "name": "codex-claude-worker-mcp-bridge",
-  "version": "0.1.1-alpha",
+  "version": "0.7.0-rc.1",
   "private": true,
   "type": "module",
-  "description": "MCP Streamable HTTP bridge for the local Codex-Claude worker harness.",
+  "description": "GPT-native local software engineering Supervisor release candidate with bounded Claude Code workflows.",
   "main": "server.mjs",
   "scripts": {
     "start": "node ./server.mjs",
     "test:mcp": "node ./smoke-client.mjs",
-    "test:side-effects": "node ./side-effect-guard.test.mjs"
+    "test:profiles": "node ./resource-profile-input.test.mjs",
+    "test:dashboard": "node ./supervisor-dashboard-routes.test.mjs",
+    "test:product-view": "node ./supervisor-product-view.test.mjs",
+    "test:side-effects": "node ./side-effect-guard.test.mjs",
+    "test:runtime": "node ../runtime/task-runtime.test.mjs",
+    "test:workflow": "node ../runtime/workflow-runtime.test.mjs",
+    "test:workflow-planner": "node ../runtime/workflow-planner.test.mjs",
+    "test:supervisor-brain": "node ../runtime/supervisor-brain.test.mjs",
+    "test:retention": "node ../runtime/runtime-retention.test.mjs",
+    "cleanup:runtime": "node ../scripts/cleanup-runtime.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

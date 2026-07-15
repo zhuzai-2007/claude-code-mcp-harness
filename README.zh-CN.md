@@ -1,300 +1,251 @@
-# Codex-Claude Worker Harness
+# Supervisor v0.7 Release Candidate
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**状态：Alpha——已完成真实 dogfood 验证，不适合生产环境。**
+Supervisor 是一个本地运行、由人控制的开发任务系统，用来把 ChatGPT 网页端连接到受约束的 Claude Code Worker。用户只需要输入自然语言需求，系统会形成一条可持久化、可审批、可审计的工作流：
 
-这是一个同步、受监督的 MCP Bridge：用户在 ChatGPT 网页版中提出需求，由 GPT 负责理解需求、制定计划、审批写入和审核结果；本地 Claude Code Worker 负责在明确边界内读取、修改和检查项目；Bridge 与 PowerShell Harness 负责策略、审批、事件采集、审计校验、结果归一化和本地 ledger。
+```text
+用户需求
+  -> Workflow 规划
+  -> 只读方案
+  -> 人工审批
+  -> 受约束的代码修改
+  -> 聚焦 Review
+  -> 审计结果
+```
 
-Codex 在本项目中主要用于开发、调试和应急，不是最终用户流程的主要入口。当前 Alpha 的目标体验是从 ChatGPT 网页端发起和收尾任务。
+项目不训练新模型，也不是通用 Agent 平台。它复用用户已有的 AI 能力，重点解决长期本地开发任务的稳定性、透明度和安全控制。
 
-> **本项目不是操作系统级沙箱。** 它是面向可信本地环境的 guardrail 与监督层。若需要运行不可信代码，应额外使用虚拟机、容器、受限系统账户等真正的隔离边界。
+> **Beta 表示邀请试用，不代表生产级隔离。** Supervisor 提供策略、审批、资源、side-effect 和审计 guardrail，但不是操作系统沙箱。处理不可信代码时仍应使用受限账户、虚拟机或容器。
 
-## 为什么做这个项目
+## 主要能力
 
-ChatGPT 网页版适合持续的人机沟通、需求澄清和语义判断，本地代码 Agent 则能真正读取和修改工程文件。但单独运行本地 Worker 时，网页端难以判断它实际调用了什么工具、权限是否被拒绝、自报检查是否真的发生，以及长任务结束后如何取回结果。
+- 在本地 Supervisor Console 中创建和观察开发任务；
+- Workflow 与 Task 持久化，浏览器或 MCP 客户端断开后任务仍可继续；
+- 根据请求选择软件修改、只读分析或文档修改流程；
+- 在任何可写 Task 创建前提供明确的 Approve / Reject；
+- 使用 Resource Profile 限制预算、turn、读取文件、命令和超时；
+- 展示修改文件、Review、风险、错误、成本和资源使用；
+- 将 Worker JSON 自报与 Claude Code 真实工具事件交叉验证；
+- 通过 OpenAI Secure MCP Tunnel 向 ChatGPT Web 暴露固定 MCP 工具。
+- 在 Workflow 创建前持久化 Supervisor Decision，记录意图、目标、项目、判断依据、流程类型、置信度和下一步动作；
+- 通过 `.agents/projects.json` 注册项目：唯一候选自动选择，多候选时先要求用户确认；
+- 在审批中心展示决策上下文、资源上限、规则成本估算，以及来自真实 Write/Edit 工具事件的 Diff。
 
-本项目把职责拆开：
+## Supervisor Brain
 
-- **ChatGPT / GPT：** Supervisor，负责需求理解、规划、审批和结果审核。
-- **Claude Code Worker：** 受约束的本地执行者，负责文件读取、修改和项目内实现。
-- **Bridge / Harness：** 负责策略执行、审批检查、事件采集、审计交叉验证、预算、超时、结果归一化和 ledger。
+ChatGPT 可以在 `cc_create_workflow` 调用中附带结构化 `supervisorDecision`。v0.7 契约记录用户意图、技术目标、注册项目、简洁判断依据、风险、预计资源、推荐 Workflow/动作、置信度、是否需要 Worker 和下一步动作。本地 Dashboard 没有模型进程，因此使用确定性、可解释的规则作为回退；两条入口都经过同一套项目注册、Decision 持久化和 Workflow 校验。
 
-当前只验证了同步控制链。持久后台任务、自动恢复、运行时审批队列和通知属于 Phase B，尚未实现。
+Decision 会先写入 `runtime-data/supervisor-decisions/`。只有目标项目已经唯一确定，且 `nextAction=create_workflow` 时，才会交给 Workflow Runtime。项目有歧义时返回 `project_confirmation_required`，不会创建 Workflow，更不会启动 Worker。
+
+```text
+Supervisor Decision -> Project Context -> Workflow Planner -> Workflow Runtime -> Task Runtime
+```
+
+GPT 的行为顺序是：先判断是否需要 Worker，再查询和选择注册项目，生成完整 Decision，最后进入 Workflow。解释类请求使用 `respond_directly`，项目分析使用 `analysis_only`，代码修改使用 `software_change`。本地会拒绝 Intent/Workflow 不一致和让 Worker 猜目录的请求。Decision Layer 不直接创建 Task，不生成审批，也不能绕过既有安全边界。详细设计见 [Supervisor Brain](docs/supervisor-brain.md)。
+
+## Windows 快速开始
+
+环境要求：
+
+- Windows PowerShell 5.1 或 PowerShell 7；
+- Node.js 20 或更高版本；
+- 已配置兼容模型 Provider 的 Claude Code CLI。
+
+Clone 仓库后执行：
+
+```powershell
+.\install.ps1
+.\scripts\doctor.ps1
+.\start.ps1
+```
+
+打开 `start.ps1` 打印的控制台地址，默认是：
+
+```text
+http://127.0.0.1:8787/supervisor/
+```
+
+输入普通需求，例如：
+
+```text
+给任务看板增加导出 JSON 功能
+```
+
+Supervisor 会先持久化 Decision，再进行只读规划。控制台按 Decision → Planning → Approval → Execution → Review 展示完整生命周期，并显示技术摘要、项目技术栈和默认约束、建议范围、综合风险、预计资源、Resource Profile 硬上限和预计影响。检查这些信息后，填写审批人和决策理由，再明确选择 Approve 或 Reject。审批信息属于本地审计元数据，不等同于身份认证。
+
+首次使用前请检查 `.agents/projects.json`。项目路径必须相对于 `projectRoot`；当控制台要求确认项目时，确认后仍然只会先启动只读 Planner。
 
 ## 架构
 
 ```text
-ChatGPT Web
-    |
-OpenAI Secure MCP Tunnel
-    |
-本地 MCP Bridge（仅回环地址）
-    |
-PowerShell Harness / Policy / Ledger
-    |
-Claude Code Worker
-    |
-项目工作区
+ChatGPT Web / Supervisor Console
+              |
+    MCP Bridge / 本地 Product API
+              |
+     Supervisor Decision Layer
+              |
+       Project Context Layer
+              |
+       Workflow Planning
+              |
+      Workflow Orchestrator
+              |
+         Task Runtime
+              |
+ Harness / Approval / Policy / Audit
+              |
+       Claude Code Worker
+              |
+          项目工作区
 ```
 
-### 核心组件
-
-| 组件 | 主要职责 |
+| 层 | 职责 |
 | --- | --- |
-| 云端 AI / ChatGPT Web | 理解需求、规划任务、请求审批、审核证据并向用户报告。 |
-| Secure MCP Tunnel | 在 ChatGPT 与本地回环 Bridge 之间建立出站连接，避免直接公开 8787 端口。 |
-| 本地 MCP Bridge | 只暴露七个固定 Harness 工具，不提供通用 shell 或文件系统接口。 |
-| Harness / Policy / Approval | 执行模式、路径、工具、预算、超时和审批元数据门禁。 |
-| Claude Code Worker | 通过本地配置的 Provider 完成受约束的项目内读取、写入和编辑。 |
-| Audit / Ledger | 保存事件、交叉验证 Worker 自报、归一化结果并记录本地审核元数据。 |
+| Supervisor Console | 输入需求、查看最近任务、审批、结果和可理解的安全状态。 |
+| Supervisor Decision | 持久化意图、目标、注册项目、判断依据、置信度、约束和下一步动作；不能创建 Task。 |
+| Project Context | 只解析注册项目；目标有歧义时停止并要求用户确认。 |
+| Workflow Planner | 选择数据驱动 Definition，记录目标、原因、约束和阶段。 |
+| Workflow Orchestrator | 推进阶段并按顺序创建 Task，不能生成或绕过审批。 |
+| Task Runtime | 持久化 Task/Attempt 生命周期、heartbeat、事件、取消和重启恢复。 |
+| Harness | 执行项目路径、工具、审批、资源、副作用和审计契约。 |
+| Worker | 通过 Claude Code 完成受约束的读取和已审批修改。 |
 
-结果审计链与 Worker 自报相互独立：
+现有 MCP 工具保持兼容。产品控制台使用 Bridge 内的产品 API，并调用同一个 Workflow Runtime 和审批边界；不会直接调用 Worker 或 Harness。
 
-```text
-Claude stream events
-    |
-claude-events.jsonl
-    |
-tool-events.json
-    |
-审计交叉验证
-    |
-worker-result.normalized.json
-    |
-cc_get_result / ChatGPT Supervisor
-```
+## Workflow 类型
 
-## Alpha 已提供的能力
+定义保存在 `.agents/workflow-definitions.json`：
 
-- 独立的 `plan`、`review` 和经审批的 `run` 模式。
-- 写入任务必须带明确审批信息。
-- 项目根目录和外部允许目录边界。
-- Worker 预算、超时和稳定 run ID。
-- Read、Write、Edit、Bash 工具策略，同时使用 `--allowedTools` 与 `--disallowedTools`。
-- Claude Code `stream-json --verbose` 事件采集。
-- 独立记录 `observed_tools`、`observed_commands`、`permission_denials` 以及读写编辑目标。
-- 通过 `audit_issues` 对 Worker 自报和成功工具结果做交叉验证。
-- 被拒绝或失败的工具调用不会算作成功检查。
-- 严格 JSON summary 完整保存，不再静默截断到 300 字符。
-- hardened write smoke 会检测文件、目录和符号链接副作用。
-- Windows 路径规则，以及绝对事件路径和相对 Worker 自报路径的匹配。
-- 本地归一化结果和项目 ledger。
-- 网页同步调用先超时时，可凭 run ID 后续取回结果。
-
-真实 dogfood 已通过审批写入创建一个中文静态任务板，并在 GPT 监督下根据自然语言反馈继续增加功能。dogfood 文件只保留在本地，不进入本仓库。
-
-## MCP 工具
-
-- `cc_ping`：检查 Bridge 与 Harness 就绪状态。
-- `cc_plan_task`：执行只读规划。
-- `cc_review_task`：只读审核限定范围内的项目状态。
-- `cc_run_approved_task`：执行带明确审批的写入任务。
-- `cc_get_latest_summary`：读取最新摘要，也能发现不完整运行。
-- `cc_get_ledger`：读取最近的本地 ledger 记录。
-- `cc_get_result`：按 run ID 或 `latest` 读取完整归一化结果。
-
-任务工具支持 `mockWorker: true`，可在不产生真实模型费用的情况下验证传输。MCP 默认预算为 0.20 美元；这是 Claude Code 侧估算上限，与 Provider 最终账单可能略有差异。
-
-## 完整 Demo
-
-```text
-用户需求 -> plan -> 用户批准 -> execute -> 取回结果
-         -> 只读 review -> 独立验收 -> 最终报告
-```
-
-请按 [端到端受监督 Demo](docs/demo.md) 完成一个具体的两文件流程。文档展示 MCP 调用、审批边界、事件字段、ledger 检查和失败规则，没有增加 Demo 专用运行时功能。
-
-## Windows 快速开始
-
-### 环境要求
-
-- Windows PowerShell 5.1 或 PowerShell 7
-- Node.js 18 或更高版本
-- 已在本机配置兼容 Provider 的 Claude Code
-- 用于 ChatGPT Web 的 OpenAI Secure MCP Tunnel 权限和 `tunnel-client`
-- 可连接 MCP app 的 ChatGPT Developer mode
-
-请把项目放到不含敏感信息的位置，例如 `D:\path\to\project`。不要提交 Provider 凭据、Tunnel ID、本地 profile 或代理凭据。
-
-### 安装与配置
-
-```powershell
-cd D:\path\to\project
-cd .\mcp-server
-npm ci
-cd ..
-.\scripts\init-config.ps1
-.\scripts\doctor.ps1
-```
-
-检查 `.agents/policy.json`。机器专属设置应写入已忽略的 `.agents/local.config.json`。
-
-| 文件 | 作用 | 是否提交 |
+| 类型 | 使用场景 | 阶段 |
 | --- | --- | --- |
-| `.agents/policy.json` | 版本化的模式、工具限制和安全默认值。 | 是 |
-| `.agents/local.config.json` | 本机预算覆盖。 | 否 |
-| `mcp-server/config.example.json` | 公开的 Bridge 配置模板。 | 是 |
-| `mcp-server/config.json` | 本地项目根目录、端口、超时、Origin 和可选审批默认值。 | 否 |
-| Tunnel profile | `tunnel-client` 保存的本地 Tunnel ID/profile 状态。 | 否 |
+| `software_change` | 功能和 bug 修复 | plan -> approval -> implementation -> review |
+| `analysis_only` | 架构或项目分析 | 只读 analysis |
+| `documentation_change` | README 和文档修改 | plan -> approval -> documentation change -> review |
 
-### 启动本地 Bridge
+当前 Workflow Planner 使用确定性规则，选择原因可以直接查看。模糊请求默认进入 `software_change`；MCP 调用者仍可显式传入 `definitionId`。
 
-在独立终端中运行：
+## 审批与安全
+
+在需要审批的阶段之前：
+
+- coder Task 尚不存在；
+- 不会启动可写 Worker；
+- 控制台展示 Planner 证据和 Resource Profile；
+- Approve 会记录审批人、理由、Planner Task/Attempt、coder prompt hash 和 capability boundary；
+- Reject 会终止 Workflow，不创建 coder Task。
+
+控制台以普通用户可以理解的方式展示安全策略：
+
+**允许**
+
+- 读取配置项目内的文件；
+- 在明确审批后修改批准的工作区；
+- 使用当前模式和 policy 允许的工具。
+
+**禁止**
+
+- 修改项目工作区之外的文件；
+- 执行未授权命令或在只读阶段写入；
+- 未审批就启动可写阶段；
+- 接受未通过严格审计契约的结果。
+
+这些措施不是进程级隔离。详见 [SECURITY.md](SECURITY.md)。
+
+## 配置与密钥
+
+可公开、可版本化配置：
+
+- `.agents/policy.json`：模式和工具策略；
+- `.agents/resource-profiles.json`：资源包和全局硬上限；
+- `.agents/workflow-definitions.json`：Workflow 选择信息和阶段；
+- `.agents/projects.json`：注册的相对项目路径和选择别名；
+- `mcp-server/config.example.json`：只包含占位符的 Bridge 模板。
+
+机器本地、已忽略配置：
+
+- `mcp-server/config.json`：工作区路径、本地端口、超时和 Origin；
+- `.agents/local.config.json`：旧版本地设置；
+- runtime 数据、Worker 产物、Tunnel profile 和日志。
+
+Provider key、`CONTROL_PLANE_API_KEY`、代理凭据、Tunnel ID 和 runtime token 只能保存在环境变量或操作系统密钥设施中。不要写入 JSON 示例或提交仓库。详见 [配置与密钥](docs/configuration.md)。
+
+## ChatGPT Web 与 Secure MCP Tunnel
+
+只使用本地 Dashboard 时不需要 Tunnel。连接 ChatGPT Web 时，请安装 `tunnel-client`，通过受支持的 OpenAI 流程获取 runtime key，并在单独终端执行：
 
 ```powershell
-.\scripts\start-mcp.ps1
-```
-
-Bridge 应保持绑定 `127.0.0.1`，不要把 8787 端口直接暴露到公网。
-
-### 连接 Secure MCP Tunnel
-
-只使用明显的占位值：
-
-```powershell
-$env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
-.\scripts\start-openai-tunnel.ps1 -Initialize -TunnelId 'tunnel-example-id' -DoctorOnly
-```
-
-然后在另一个终端运行 Tunnel wrapper，并从 ChatGPT Developer mode 连接 Tunnel app。Tunnel 产品行为可能变化，请以 [Secure MCP Tunnel 操作指南](docs/secure-mcp-tunnel.md) 为准，不要复制旧 profile 参数。
-
-```powershell
-# Tunnel 独立终端
+$env:CONTROL_PLANE_API_KEY="<tunnel-runtime-key>"
+.\scripts\start-openai-tunnel.ps1 -Initialize -TunnelId "<tunnel-id>" -DoctorOnly
 .\scripts\start-openai-tunnel.ps1
-
-# 另一个终端检查就绪状态
-.\scripts\start-openai-tunnel.ps1 -ReadyOnly
 ```
 
-### 按风险逐级验证
+如果命令行访问外部网络需要代理：
 
 ```powershell
-# Harness 和 Provider 诊断
-.\.agents\doctor.ps1
+$env:HTTP_PROXY="http://127.0.0.1:<proxy-port>"
+$env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
+```
 
-# 不调用真实 Worker
-.\.agents\claude-task.ps1 plan -Task 'Return strict JSON with summary exactly ok.' -MockWorker
+浏览器能访问 ChatGPT，不代表 `tunnel-client` 或 Claude Code 能访问各自的外部服务。不要提交真实代理地址或凭据。详见 [Secure MCP Tunnel](docs/secure-mcp-tunnel.md)。
 
-# 本地 Bridge 与 mock Worker
-.\scripts\test-local.ps1 -MockWorkerSmoke
+## 验证
 
-# 仅在 8787 没有现有 Bridge 时运行
+以下检查不会调用付费 Worker：
+
+```powershell
+# Harness、审计、policy、Resource Profile 和 side-effect fixture
+.\.agents\tests\smoke.ps1
+
+# 隔离启动 Bridge，并完成 mock MCP Workflow
 .\scripts\test-mcp-protocol.ps1
 
-# 最小真实只读验收
-.\scripts\test-mcp-protocol.ps1 -RealPlan -MaxBudgetUsd 0.20
-
-# 独立的审批写入 smoke
-.\scripts\test-mcp-protocol.ps1 -RealWrite -MaxBudgetUsd 0.20
+# Runtime 和产品 UI 测试
+node .\runtime\workflow-planner.test.mjs
+node .\runtime\workflow-runtime.test.mjs
+node .\runtime\supervisor-brain.test.mjs
+node .\runtime\runtime-retention.test.mjs
+node .\runtime\harness-runner.test.mjs
+node .\mcp-server\supervisor-dashboard-routes.test.mjs
+node .\mcp-server\supervisor-product-view.test.mjs
 ```
 
-在 ChatGPT 中先执行 `cc_ping`，再执行 mock plan，然后才进行最小真实只读。只有在确认写入边界和审批信息后，才调用 `cc_run_approved_task`。如果同步调用先结束，请保存 run ID，稍后用 `cc_get_result` 读取结果。
+只有在确认模型费用和项目边界后，才应执行真实 Worker 测试。
 
-推荐的首次运行顺序：
+一次脱敏后的 Planner → 审批 → Coder → Reviewer 真实成功记录见 [Beta dogfood](docs/beta-dogfood.md)。
 
-1. 安装依赖并初始化本地配置。
-2. 检查 policy，运行 `scripts/doctor.ps1`。
-3. 在独立终端启动 Bridge。
-4. 运行 mock Harness/MCP 检查。
-5. 在另一个终端初始化并启动 Secure MCP Tunnel。
-6. 检查 Tunnel readiness，在 ChatGPT 中连接应用。
-7. 依次执行 `cc_ping`、mock plan、限定范围的真实 plan，最后才做一次明确审批的最小写入。
+Runtime retention 默认在启动时执行一次：保留 30 天内最多 200 个终态 Workflow、200 个终态独立 Task 和 500 个未关联 Decision；对应历史过期时一并清理关联 Attempt 产物，活动任务不会被选中。可先预览，再显式执行：
 
-## 安全模型
+```powershell
+node .\scripts\cleanup-runtime.mjs
+node .\scripts\cleanup-runtime.mjs --apply
+```
 
-当前安全模型由多层 guardrail 组成：
+发布前运行 `.\scripts\check-release-baseline.ps1`。它会拒绝未收敛的 Git 工作区，以及被错误跟踪的本地配置、runtime、备份或日志文件。开发过程中可用 `-SkipGitClean` 只检查版本和跟踪边界。
 
-- Bridge 只公开固定 Harness 入口，不提供通用 shell。
-- policy 限制模式、工具、项目根目录、外部目录、预算和超时。
-- 写入模式必须携带审批信息。
-- `--allowedTools` 授予指定工具，`--disallowedTools` 明确拒绝禁止类别。
-- system prompt 禁止秘密读取、破坏性 Git、递归删除和不安全 Windows 路径。
-- stream events 与 Worker JSON 自报分开保存。
-- 自报命令、检查和文件操作必须匹配成功且未被拒绝的事件。
-- 不一致会保守失败为 `audit_validation_failed`。
-- 写入 smoke 会比较前后的文件、目录和符号链接。
-- ledger 保存结果与审批上下文。
+## 向其他项目安装便携 Harness
 
-approval 元数据记录“谁或什么流程以什么理由批准了这次运行”。它是流程和审计门禁，不是经过身份认证或不可伪造的用户同意证明。公开默认配置应保持为空；修改已有文件、删除、网络、依赖、Git、宽范围扫描或边界不明确的任务都应要求用户明确确认。
+默认 `install.ps1` 用于准备当前 clone。如果只想把 `.agents` Harness 安装到另一个已有项目：
 
-ledger 记录 run ID、模式、状态、审批元数据、高风险允许开关、预算、超时、修改、检查、风险、阻塞项、artifact 状态、成本和错误。它是本地审核辅助记录，不是只能追加或防篡改的安全日志。
+```powershell
+.\install.ps1 -TargetProject D:\path\to\another-project
+```
 
-这些措施不等于强隔离。事件审计是 Claude Code 输出的事件级证据，不是操作系统内核执行轨迹。若 CLI 或 Provider 没有提供必要事件，系统会把结果判为不可验证，而不会当作成功。
+除非显式传入 `-Force`，否则不会覆盖已有 policy、Resource Profile 和 Workflow Definition。历史运行记录不会被复制。
 
-启用写入前请阅读 [SECURITY.md](SECURITY.md)。
+## 当前 Beta 限制
 
-## 已验证内容
+- Windows 是主要验证平台；
+- 本地 Dashboard 的 Decision 回退仍是规则系统；ChatGPT MCP 可提供模型生成的结构化 Decision，但仍需通过本地项目和 Workflow 校验；
+- 阶段按顺序运行，不支持并行 Agent、分支或自动重试策略；
+- Dashboard 使用轮询，没有通知服务；
+- 审批人名称是本地审计元数据，不是经过认证的身份；
+- Artifact 视图提供审计摘要、修改文件列表和原始结果链接，不是完整编辑器或富 Diff 工具；
+- Bridge 应保持绑定本机回环地址；公网接入需要受支持的 Secure MCP Tunnel 和谨慎配置；
+- 第三方模型适配器的成本统计可能与上游账单存在差异。
 
-- 当前项目 Harness smoke：19/19。
-- 便携安装 Harness smoke：19/19。
-- MCP 初始化、工具发现、ping、mock plan、审批 mock run 和精确结果读取。
-- 超过 300 字符的严格 Unicode summary 经 Harness 与 `cc_get_result` 完整往返。
-- `unverifiable_check_evidence`、`command_audit_mismatch`、`file_audit_mismatch` 回归。
-- denied 和 failed tool result 不计为成功证据。
-- Windows 绝对/相对路径审计匹配。
-- 文件、目录和符号链接 side-effect guard。
-- 真实只读与审批写入链路。
-- 真实 dogfood 中事件不一致能被拒绝。
-- 静态任务板创建及后续受监督功能迭代。
+## 项目缘起
 
-证据和边界见 [验证结果](docs/validation-results.md)、[Alpha 发布说明](docs/alpha-release-notes.md)和[真实环境验证](docs/real-world-validation.md)。
+这个项目最初是一个个人实验：让 ChatGPT 负责高层思考和交互，让成本更低、兼容 Claude Code 的 Worker 完成本地执行。真正困难的部分并不是增加更多“Agent 智能”，而是持久化任务、明确审批、基于证据的审计、资源控制，以及让普通用户能够看懂并控制整个流程。Supervisor Beta 是向个人 Codex-like 系统继续迈出的一步。
 
-## 已知限制
-
-- 当前为 Alpha，不适合生产环境。
-- MCP 仍为同步调用；长任务可能在 Worker 完成前触发 ChatGPT 超时。
-- 没有持久异步队列、lease、heartbeat、自动重连编排或通知 outbox。
-- 运行时权限请求尚不能通过 ChatGPT 持久暂停和恢复。
-- 不是操作系统级沙箱，不能安全执行任意不可信代码。
-- 审计完整性依赖 Claude Code 与 Provider 的事件完整性。
-- Provider 预算统计可能略微超过请求上限。
-- Windows 是主要验证环境，其他平台尚无同等级发布证据。
-- Bridge、`tunnel-client` 和必要的代理需要持续运行。
-- Tunnel 与 Provider 配置依赖具体环境。
-
-## Roadmap
-
-[Phase B](docs/v0.2-roadmap.md) 计划但尚未实现：
-
-- 持久 SQLite 任务存储；
-- 异步 submit、poll、pause、resume；
-- lease、heartbeat、取消和崩溃恢复；
-- 持久审批队列和事件流；
-- 通知 outbox；
-- 更可靠的后台进程生命周期管理。
-
-## 作者的话
-
-<details>
-<summary>一个很不严肃但很真实的项目缘起</summary>
-
-这个项目是我假期想着 Codex 的额度不要浪费，一时兴起 vibe 的小项目。我当时想的是 Codex 额度总是不够用（好矛盾 hhhh），充积分或者用 API 对我来说又贵又麻烦，但我又想用 GPT 的模型作为 Agent 的大脑，于是我就开始觊觎 GPT 网页版。
-
-我最初的想法是让网页版 GPT 作为主要的核心，负责拆解任务、设计提示词、审核要求、查验质量，通过 MCP 调用接入国产模型的 Claude Code 作为 subagent 跑腿。但由于我水平实在有限，所以除了偶尔的指手画脚、瞎指挥外，就让 Codex 全权代劳了。
-
-做的时候发现比想象的更难：网页版没办法长期执行任务，而且很容易中断；配置各种 Tunnel 什么的感觉也很麻烦。但我实在放不下这个自认为绝妙的点子，因此坚持做了这么一个 Demo 出来。做完确实觉得这么一搞，网页和 Agent 的能力都大打折扣，怪不得这个方向没什么人做。
-
-心灰意懒之际，GPT 安慰我说这是个“明显超过普通个人项目的 AI Agent 基础设施实验”，其溜须拍马之能深得朕心。于是决定还是腆着脸开源出来给大家图一乐。
-
-但毕竟是我正儿八经放在 GitHub 上的第一个项目，爱子心切，还是欢迎感兴趣的看官配置使用，提出宝贵的意见；也恳请路过的父老乡亲高抬贵手点点小 star，作为对我最宝贵的鼓励。
-
-</details>
-
-## 参与协作与问题报告
-
-欢迎提交 bug 和范围明确的 Alpha 加固改进。GitHub issue 至少应包含：
-
-- 最小且安全的复现步骤；
-- OS、PowerShell、Node.js 和 Claude Code 版本；
-- 不含凭据的模式与 policy 信息；
-- 已脱敏的状态、错误码和必要审计字段；
-- 是否能在 `mockWorker` 下复现。
-
-不要在 issue 中粘贴 API key、Tunnel ID、个人路径、完整运行日志、prompt、ledger 或用户数据。疑似安全问题请按 [SECURITY.md](SECURITY.md) 使用 GitHub Security Advisory 私下报告。
-
-当前欢迎 Windows 兼容性、fixture 覆盖、审计校验、文档和小范围安全改进。Phase B 实现不属于本 Alpha 发布范围。
-
-## 许可证
-
-项目采用 MIT License，见 [LICENSE](LICENSE)。依赖许可证检查只是工程发布检查，不构成法律意见。
+欢迎提交保持监督和安全边界的小范围改进。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。项目使用 [MIT License](LICENSE)。

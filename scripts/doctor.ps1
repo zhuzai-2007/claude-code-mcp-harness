@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch] $Json
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -7,92 +9,178 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $serverDir = Join-Path $repoRoot "mcp-server"
 $packagePath = Join-Path $serverDir "package.json"
+$nodeModulesPath = Join-Path $serverDir "node_modules"
 $configPath = Join-Path $serverDir "config.json"
 
 function New-Check {
     param(
-        [Parameter(Mandatory = $true)][string] $Name,
-        [Parameter(Mandatory = $true)][bool] $Ok,
-        [string] $Detail = ""
+        [string] $Name,
+        [ValidateSet("ok", "warn", "error")][string] $Status,
+        [string] $Detail,
+        [string] $Advice = "",
+        [bool] $Required = $true
     )
-    [pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail }
+    [pscustomobject]@{ name = $Name; status = $Status; ok = ($Status -eq "ok"); required = $Required; detail = $Detail; advice = $Advice }
 }
 
-function Invoke-VersionCheck {
-    param(
-        [Parameter(Mandatory = $true)][string] $Command,
-        [string[]] $Arguments = @("--version"),
-        [int] $TimeoutSeconds = 15
-    )
-    $cmd = Get-Command $Command -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        return New-Check $Command $false "Command not found."
+function Get-CommandCheck {
+    param([string] $Name, [bool] $Required, [string] $Advice, [switch] $Version)
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if (-not $command) {
+        return New-Check $Name $(if ($Required) { "error" } else { "warn" }) "Not found on PATH." $Advice $Required
     }
-
-    $job = Start-Job -ScriptBlock {
-        param($Exe, $CommandArgs)
-        & $Exe @CommandArgs 2>&1 | Out-String
-        return $LASTEXITCODE
-    } -ArgumentList $cmd.Source, $Arguments
-
-    if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
-        Stop-Job -Job $job -ErrorAction SilentlyContinue
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-        return New-Check $Command $false "Command timed out after $TimeoutSeconds seconds."
+    $detail = $command.Source
+    if ($Version) {
+        try {
+            $versionText = (& $command.Source --version 2>&1 | Out-String).Trim()
+            if ($versionText) { $detail = ($versionText -split "`r?`n")[0] }
+        } catch {}
     }
-
-    $output = Receive-Job -Job $job -ErrorAction SilentlyContinue | Out-String
-    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-    $firstLine = (($output -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1)
-    return New-Check $Command $true $firstLine
+    return New-Check $Name "ok" $detail "" $Required
 }
 
-function Test-CommandAvailable {
-    param([Parameter(Mandatory = $true)][string] $Command)
-    $cmd = Get-Command $Command -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        return New-Check $Command $false "Command not found."
+function Get-JsonCheck {
+    param([string] $Name, [string] $Path, [string] $Advice)
+    if (-not (Test-Path -LiteralPath $Path)) { return New-Check $Name "error" "Missing: $Path" $Advice $true }
+    try {
+        $data = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        return [pscustomobject]@{ check = (New-Check $Name "ok" $Path); data = $data }
+    } catch {
+        return New-Check $Name "error" "Invalid JSON: $($_.Exception.Message)" $Advice $true
     }
-    return New-Check $Command $true $cmd.Source
 }
 
 $checks = [System.Collections.Generic.List[object]]::new()
-$checks.Add((Invoke-VersionCheck "node"))
-$checks.Add((Invoke-VersionCheck "npm"))
-$checks.Add((New-Check "mcp-server/package.json" (Test-Path -LiteralPath $packagePath) $packagePath))
-$checks.Add((New-Check "mcp-server/config.json" (Test-Path -LiteralPath $configPath) $configPath))
+$checks.Add((Get-CommandCheck "node" $true "Install Node.js 20 or newer, then reopen PowerShell." -Version))
+$checks.Add((Get-CommandCheck "npm" $true "Install npm with Node.js, then reopen PowerShell." -Version))
+$checks.Add((Get-CommandCheck "claude" $true "Install Claude Code CLI and confirm 'claude --version' works."))
 
-$projectRoot = $null
-if (Test-Path -LiteralPath $configPath) {
+if (Test-Path -LiteralPath $packagePath) {
+    $checks.Add((New-Check "MCP package" "ok" $packagePath))
+} else {
+    $checks.Add((New-Check "MCP package" "error" "Missing package.json." "Clone the complete repository again."))
+}
+if (Test-Path -LiteralPath $nodeModulesPath) {
+    $checks.Add((New-Check "MCP dependencies" "ok" $nodeModulesPath))
+} else {
+    $checks.Add((New-Check "MCP dependencies" "error" "node_modules is missing." "Run .\install.ps1 or npm ci --prefix .\mcp-server."))
+}
+
+$config = $null
+$configResult = Get-JsonCheck "Local config" $configPath "Run .\scripts\init-config.ps1."
+if ($configResult.PSObject.Properties["check"]) {
+    $checks.Add($configResult.check)
+    $config = $configResult.data
+} else { $checks.Add($configResult) }
+
+$projectRoot = $repoRoot
+if ($config) {
     try {
-        $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $projectRoot = [System.IO.Path]::GetFullPath([string]$config.projectRoot)
-        $checks.Add((New-Check "projectRoot" (Test-Path -LiteralPath $projectRoot) $projectRoot))
+        if (Test-Path -LiteralPath $projectRoot) {
+            $checks.Add((New-Check "Project workspace" "ok" $projectRoot))
+        } else {
+            $checks.Add((New-Check "Project workspace" "error" "Configured path does not exist: $projectRoot" "Update projectRoot in mcp-server\config.json."))
+        }
     } catch {
-        $checks.Add((New-Check "projectRoot" $false $_.Exception.Message))
+        $checks.Add((New-Check "Project workspace" "error" $_.Exception.Message "Set projectRoot to an existing absolute path."))
+    }
+}
+
+foreach ($entry in @(
+    @{ Name = "Execution policy"; Path = (Join-Path $projectRoot ".agents\policy.json"); Advice = "Run .\install.ps1 -TargetProject <path> to install the Harness." },
+    @{ Name = "Resource profiles"; Path = (Join-Path $projectRoot ".agents\resource-profiles.json"); Advice = "Restore .agents\resource-profiles.json from the repository." },
+    @{ Name = "Workflow definitions"; Path = (Join-Path $projectRoot ".agents\workflow-definitions.json"); Advice = "Restore .agents\workflow-definitions.json from the repository." }
+    @{ Name = "Project registry"; Path = (Join-Path $projectRoot ".agents\projects.json"); Advice = "Restore .agents\projects.json and register local project paths before using Supervisor." }
+)) {
+    $result = Get-JsonCheck $entry.Name $entry.Path $entry.Advice
+    $checks.Add($(if ($result.PSObject.Properties["check"]) { $result.check } else { $result }))
+}
+
+$projectRegistryPath = Join-Path $projectRoot ".agents\projects.json"
+if (Test-Path -LiteralPath $projectRegistryPath) {
+    try {
+        $registry = Get-Content -LiteralPath $projectRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $projectErrors = [System.Collections.Generic.List[string]]::new()
+        foreach ($project in @($registry.projects)) {
+            if ([string]::IsNullOrWhiteSpace([string]$project.id) -or [string]::IsNullOrWhiteSpace([string]$project.path) -or [string]::IsNullOrWhiteSpace([string]$project.description)) { $projectErrors.Add("Each project requires id, path, and description.") }
+            if (@($project.techStack).Count -eq 0) { $projectErrors.Add("Project '$($project.id)' has no techStack.") }
+            if (@($project.aliases).Count -eq 0) { $projectErrors.Add("Project '$($project.id)' has no aliases.") }
+            if (@($project.defaultConstraints).Count -eq 0) { $projectErrors.Add("Project '$($project.id)' has no defaultConstraints.") }
+            try {
+                $registeredPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot ([string]$project.path)))
+                $rootExact = $projectRoot.TrimEnd('\')
+                $rootPrefix = "$rootExact\"
+                $insideRoot = $registeredPath.TrimEnd('\').Equals($rootExact, [System.StringComparison]::OrdinalIgnoreCase) -or $registeredPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+                if (-not $insideRoot -or -not (Test-Path -LiteralPath $registeredPath -PathType Container)) { $projectErrors.Add("Project '$($project.id)' path is missing or outside projectRoot.") }
+            } catch { $projectErrors.Add("Project '$($project.id)' path is invalid.") }
+        }
+        $checks.Add((New-Check "Project context contract" $(if ($projectErrors.Count) { "error" } else { "ok" }) $(if ($projectErrors.Count) { ($projectErrors | Select-Object -Unique) -join " " } else { "$(@($registry.projects).Count) registered projects include stack, aliases, and default constraints." }) "Update .agents\projects.json before startup."))
+    } catch {
+        $checks.Add((New-Check "Project context contract" "error" $_.Exception.Message "Repair .agents\projects.json."))
+    }
+}
+
+$bridgeUrl = $null
+if ($config) {
+    $hostName = if ($config.host) { [string]$config.host } else { "127.0.0.1" }
+    $port = if ($config.port) { [int]$config.port } else { 8787 }
+    $bridgeUrl = "http://${hostName}:${port}"
+    try {
+        $health = Invoke-RestMethod -Uri "$bridgeUrl/health" -TimeoutSec 2
+        if ($health.ok) { $checks.Add((New-Check "MCP Bridge" "ok" "$bridgeUrl/health" "" $false)) }
+        else { $checks.Add((New-Check "MCP Bridge" "warn" "Health endpoint did not report ok." "Start it with .\start.ps1." $false)) }
+    } catch {
+        $checks.Add((New-Check "MCP Bridge" "warn" "Not running at $bridgeUrl." "After required checks pass, run .\start.ps1." $false))
     }
 } else {
-    $checks.Add((New-Check "projectRoot" $false "config.json is missing. Run scripts/init-config.ps1 first."))
+    $checks.Add((New-Check "MCP Bridge" "warn" "Cannot determine endpoint until config exists." "Run .\scripts\init-config.ps1." $false))
 }
 
-if (-not $projectRoot) {
-    $projectRoot = $repoRoot
+$tunnel = Get-Command "tunnel-client" -ErrorAction SilentlyContinue
+if (-not $tunnel) {
+    $checks.Add((New-Check "OpenAI Tunnel" "warn" "tunnel-client is not installed." "Install it only when connecting ChatGPT Web; local Dashboard use does not require it." $false))
+} elseif ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_API_KEY)) {
+    $checks.Add((New-Check "OpenAI Tunnel" "warn" "CLI found, but CONTROL_PLANE_API_KEY is not set." "Set the key only in the terminal that starts the tunnel; never commit it." $false))
+} else {
+    $checks.Add((New-Check "OpenAI Tunnel" "ok" "CLI and runtime key are available. Secret value was not read or printed." "" $false))
 }
 
-$claudeTask = Join-Path $projectRoot ".agents\claude-task.ps1"
-$summary = Join-Path $projectRoot ".agents\summary.ps1"
-$ledger = Join-Path $projectRoot ".agents\ledger.ps1"
-$checks.Add((New-Check ".agents/claude-task.ps1" (Test-Path -LiteralPath $claudeTask) $claudeTask))
-$checks.Add((New-Check ".agents/summary.ps1" (Test-Path -LiteralPath $summary) $summary))
-$checks.Add((New-Check ".agents/ledger.ps1" (Test-Path -LiteralPath $ledger) $ledger))
-$checks.Add((Test-CommandAvailable "claude"))
+$proxyConfigured = -not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY) -or -not [string]::IsNullOrWhiteSpace($env:HTTP_PROXY)
+$checks.Add((New-Check "Network proxy" $(if ($proxyConfigured) { "ok" } else { "warn" }) $(if ($proxyConfigured) { "Proxy environment is configured; values are hidden." } else { "No HTTP_PROXY/HTTPS_PROXY set." }) "Set proxy environment variables only when command-line network access requires them." $false))
+$checks.Add((New-Check "External Worker connectivity" "warn" "Doctor does not send project content or make a paid model call." "Run a reviewed read-only dogfood after confirming provider and proxy access." $false))
 
-$ok = -not ($checks | Where-Object { -not $_.ok })
+$hasErrors = @($checks | Where-Object { $_.status -eq "error" }).Count -gt 0
+$hasWarnings = @($checks | Where-Object { $_.status -eq "warn" }).Count -gt 0
 $result = [pscustomobject]@{
-    ok = $ok
+    ok = -not $hasErrors
+    status = if ($hasErrors) { "error" } elseif ($hasWarnings) { "ready_with_warnings" } else { "ready" }
     repoRoot = $repoRoot
+    dashboardUrl = if ($bridgeUrl) { "$bridgeUrl/supervisor/" } else { $null }
     checks = $checks
 }
 
-$result | ConvertTo-Json -Depth 6
-if (-not $ok) { exit 1 }
+if ($Json) {
+    $result | ConvertTo-Json -Depth 8
+} else {
+    Write-Host ""
+    Write-Host "Supervisor v0.7 RC doctor" -ForegroundColor Cyan
+    Write-Host "Repository: $repoRoot"
+    Write-Host ""
+    foreach ($check in $checks) {
+        $prefix = if ($check.status -eq "ok") { "[OK]  " } elseif ($check.status -eq "warn") { "[WARN]" } else { "[FAIL]" }
+        $color = if ($check.status -eq "ok") { "Green" } elseif ($check.status -eq "warn") { "Yellow" } else { "Red" }
+        Write-Host ("{0} {1}: {2}" -f $prefix, $check.name, $check.detail) -ForegroundColor $color
+        if ($check.advice) { Write-Host ("       Next: {0}" -f $check.advice) -ForegroundColor DarkGray }
+    }
+    Write-Host ""
+    if ($hasErrors) {
+        Write-Host "Not ready. Resolve [FAIL] items, then run doctor again." -ForegroundColor Red
+    } elseif ($hasWarnings) {
+        Write-Host "Ready for local use. [WARN] items are optional or expected before startup." -ForegroundColor Yellow
+    } else {
+        Write-Host "Ready. Start Supervisor with .\start.ps1" -ForegroundColor Green
+    }
+}
+
+if ($hasErrors) { exit 1 }

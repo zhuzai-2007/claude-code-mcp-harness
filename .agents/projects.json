@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "projects": [
+    {
+      "id": "supervisor-runtime",
+      "name": "Supervisor Runtime",
+      "path": ".",
+      "description": "The MCP Bridge, Supervisor Brain, Workflow Runtime, Harness, and product documentation.",
+      "language": "JavaScript, PowerShell",
+      "techStack": ["Node.js ESM", "Express", "MCP SDK", "PowerShell", "Static HTML/CSS/JavaScript"],
+      "lastUsed": null,
+      "aliases": ["supervisor runtime", "mcp bridge", "harness project", "本项目", "当前项目"],
+      "defaultConstraints": [
+        "Preserve the Harness, approval, audit, Task Runtime, and Workflow Runtime boundaries.",
+        "Do not introduce a database, front-end framework, or additional Agent runtime.",
+        "Keep changes localized and maintain Windows PowerShell operation."
+      ]
+    },
+    {
+      "id": "dogfood-study-board",
+      "name": "Dogfood Study Board",
+      "path": "workspace/dogfood-study-board",
+      "description": "A small browser task board used for bounded feature-change dogfood.",
+      "language": "HTML, CSS, JavaScript",
+      "techStack": ["Static HTML", "CSS", "Browser JavaScript", "localStorage"],
+      "lastUsed": null,
+      "aliases": ["任务看板", "study board", "dogfood study board"],
+      "defaultConstraints": [
+        "Keep the application dependency-free and browser-only.",
+        "Preserve existing task data and localStorage behavior unless the request explicitly changes it.",
+        "Limit changes to the registered task-board directory."
+      ]
+    },
+    {
+      "id": "supervisor-dashboard",
+      "name": "Supervisor Dashboard",
+      "path": "workspace/supervisor-dashboard",
+      "description": "The local approval, workflow status, event, artifact, and diff console.",
+      "language": "HTML, CSS, JavaScript",
+      "techStack": ["Static HTML", "CSS", "Browser JavaScript", "Local REST API"],
+      "lastUsed": null,
+      "aliases": ["supervisor dashboard", "supervisor console", "审批中心", "控制台"],
+      "defaultConstraints": [
+        "Do not introduce React, Vue, or another front-end framework.",
+        "Keep the Dashboard observational and route state changes through the existing local product API.",
+        "Do not bypass Workflow approval or call the Harness directly."
+      ]
+    }
+  ]
+}

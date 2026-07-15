@@ -10,12 +10,14 @@ param(
     [string] $RunId,
     [decimal] $BudgetUsd = -1,
     [decimal] $MaxBudgetUsd = 0.10,
+    [string] $ResourceProfile,
     [string] $Model,
     [string[]] $AllowDir = @(),
     [string[]] $ContextFiles = @(),
-    [int] $MaxFilesRead = 20,
-    [int] $MaxCommands = 8,
-    [int] $WorkerTimeoutSeconds = 120,
+    [int] $MaxTurns = -1,
+    [int] $MaxFilesRead = -1,
+    [int] $MaxCommands = -1,
+    [int] $WorkerTimeoutSeconds = -1,
     [string] $ApprovedBy,
     [string] $ApprovalReason,
     [switch] $AllowNetwork,
@@ -37,6 +39,12 @@ $OutputEncoding = $script:Utf8NoBom
 $ExitCodes = @{ success = 0; worker_failed = 1; policy_blocked = 2; invalid_input = 3; environment_failed = 4 }
 $maxBudgetProvided = $PSBoundParameters.ContainsKey('MaxBudgetUsd')
 $budgetProvided = $PSBoundParameters.ContainsKey('BudgetUsd')
+$maxTurnsProvided = $PSBoundParameters.ContainsKey('MaxTurns')
+$maxFilesReadProvided = $PSBoundParameters.ContainsKey('MaxFilesRead')
+$maxCommandsProvided = $PSBoundParameters.ContainsKey('MaxCommands')
+$workerTimeoutProvided = $PSBoundParameters.ContainsKey('WorkerTimeoutSeconds')
+$script:ResourceProfileName = if ($ResourceProfile) { $ResourceProfile } else { $null }
+$script:ResourceLimits = $null
 
 function Resolve-FullPath {
     param([Parameter(Mandatory = $true)][string] $Path)
@@ -57,6 +65,15 @@ function ConvertTo-Array {
     if ($null -eq $Value) { return @() }
     if ($Value -is [System.Array]) { return @($Value) }
     return @($Value)
+}
+
+function ConvertTo-AuditPath {
+    param($Value)
+    $normalized = ([string]$Value).Replace('\', '/')
+    while ($normalized.StartsWith('./', [System.StringComparison]::Ordinal)) {
+        $normalized = $normalized.Substring(2)
+    }
+    return $normalized
 }
 
 function Get-PropValue {
@@ -276,11 +293,13 @@ function New-NormalizedResult {
         [string] $Mode,
         [string] $Summary,
         [object[]] $FilesRead = @(),
+        [object[]] $ProposedChanges = @(),
         [object[]] $ChangesMade = @(),
         [object[]] $CommandsRun = @(),
         [object[]] $TestsOrChecks = @(),
         [object[]] $Risks = @(),
         [object[]] $BlockedOn = @(),
+        $RunResult = $null,
         [object[]] $ObservedTools = @(),
         [object[]] $ObservedCommands = @(),
         [object[]] $PermissionDenials = @(),
@@ -289,6 +308,7 @@ function New-NormalizedResult {
         [object[]] $SupervisorNotes = @(),
         [string] $ArtifactStatus = $null,
         $Cost = $null,
+        $ResourceUsage = $null,
         [hashtable] $Artifacts = @{},
         $ErrorObject = $null
     )
@@ -304,11 +324,13 @@ function New-NormalizedResult {
         mode = $Mode
         summary = $Summary
         files_read = @($FilesRead)
+        proposed_changes = @($ProposedChanges)
         changes_made = @($ChangesMade)
         commands_run = @($CommandsRun)
         tests_or_checks = @($TestsOrChecks)
         risks = @($Risks)
         blocked_on = @($BlockedOn)
+        run_result = $RunResult
         observed_tools = @($ObservedTools)
         observed_commands = @($ObservedCommands)
         permission_denials = @($PermissionDenials)
@@ -317,6 +339,9 @@ function New-NormalizedResult {
         supervisor_notes = @($SupervisorNotes)
         artifact_status = $ArtifactStatus
         cost = $Cost
+        resource_profile = $script:ResourceProfileName
+        resource_limits = $script:ResourceLimits
+        resource_usage = $ResourceUsage
         artifacts = $Artifacts
         error = $normalizedError
     }
@@ -352,10 +377,12 @@ function Add-LedgerEntry {
             runDir = $RunDir
             summary = Get-PropValue -Object $Normalized -Name 'summary'
             changes_made = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'changes_made'))
+            proposed_changes = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'proposed_changes'))
             commands_run = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'commands_run'))
             tests_or_checks = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'tests_or_checks'))
             risks = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'risks'))
             blocked_on = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'blocked_on'))
+            run_result = Get-PropValue -Object $Normalized -Name 'run_result'
             supervisor_notes = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'supervisor_notes'))
             artifact_status = Get-PropValue -Object $Normalized -Name 'artifact_status'
             cost = Get-PropValue -Object $Normalized -Name 'cost'
@@ -370,6 +397,9 @@ function Add-LedgerEntry {
             }
             budgetUsd = $BudgetUsd
             workerTimeoutSeconds = $WorkerTimeoutSeconds
+            resourceProfile = $script:ResourceProfileName
+            resourceLimits = $script:ResourceLimits
+            resourceUsage = Get-PropValue -Object $Normalized -Name 'resource_usage'
             error = Get-PropValue -Object $Normalized -Name 'error'
         }
         $ledgerLine = ($entry | ConvertTo-Json -Depth 12 -Compress) + [Environment]::NewLine
@@ -481,12 +511,6 @@ try {
     $policy = Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $policy.modes.$Mode) { throw "Mode '$Mode' is not configured in policy.json." }
     $modePolicy = $policy.modes.$Mode
-    $localConfig = $null
-    $localConfigPath = Join-Path $agentsRoot 'local.config.json'
-    if (Test-Path -LiteralPath $localConfigPath) {
-        $localConfig = Get-Content -LiteralPath $localConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    }
-
     if ($InputJson) {
         $inputPath = Resolve-FullPath $InputJson
         if (-not (Test-IsPathInside -Child $inputPath -Parent $projectRoot)) { throw "InputJson must be inside the project root. InputJson=$inputPath ProjectRoot=$projectRoot" }
@@ -496,17 +520,18 @@ try {
         if ($props['taskFile']) { $TaskFile = [string]$props['taskFile'].Value }
         if ($props['budgetUsd'] -and -not $budgetProvided) { $BudgetUsd = [decimal]$props['budgetUsd'].Value; $budgetProvided = $true }
         if ($props['maxBudgetUsd'] -and -not $maxBudgetProvided) { $MaxBudgetUsd = [decimal]$props['maxBudgetUsd'].Value; $maxBudgetProvided = $true }
+        if ($props['resourceProfile'] -and -not $ResourceProfile) { $ResourceProfile = [string]$props['resourceProfile'].Value }
         if ($props['model'] -and -not $Model) { $Model = [string]$props['model'].Value }
         if ($props['contextFiles']) { $ContextFiles = @($props['contextFiles'].Value) }
-        if ($props['maxFilesRead']) { $MaxFilesRead = [int]$props['maxFilesRead'].Value }
-        if ($props['maxCommands']) { $MaxCommands = [int]$props['maxCommands'].Value }
-        if ($props['workerTimeoutSeconds']) { $WorkerTimeoutSeconds = [int]$props['workerTimeoutSeconds'].Value }
+        if ($props['maxTurns'] -and -not $maxTurnsProvided) { $MaxTurns = [int]$props['maxTurns'].Value; $maxTurnsProvided = $true }
+        if ($props['maxFilesRead'] -and -not $maxFilesReadProvided) { $MaxFilesRead = [int]$props['maxFilesRead'].Value; $maxFilesReadProvided = $true }
+        if ($props['maxCommands'] -and -not $maxCommandsProvided) { $MaxCommands = [int]$props['maxCommands'].Value; $maxCommandsProvided = $true }
+        if ($props['workerTimeoutSeconds'] -and -not $workerTimeoutProvided) { $WorkerTimeoutSeconds = [int]$props['workerTimeoutSeconds'].Value; $workerTimeoutProvided = $true }
         if ($props['approvedBy'] -and -not $ApprovedBy) { $ApprovedBy = [string]$props['approvedBy'].Value }
         if ($props['approvalReason'] -and -not $ApprovalReason) { $ApprovalReason = [string]$props['approvalReason'].Value }
         if ($props['mockWorker']) { $MockWorker = [bool]$props['mockWorker'].Value }
     }
 
-    if ($WorkerTimeoutSeconds -lt 1) { throw 'WorkerTimeoutSeconds must be 1 or higher.' }
     if ([string]::IsNullOrWhiteSpace($Task) -and [string]::IsNullOrWhiteSpace($TaskFile)) { throw 'Provide either -Task, -TaskFile, or -InputJson with task/taskFile.' }
     if ($TaskFile) {
         $taskFilePath = Resolve-FullPath $TaskFile
@@ -515,15 +540,41 @@ try {
     }
 
     if (($Mode -eq 'plan' -or $Mode -eq 'review') -and -not (Test-ReadonlyTools -ModePolicy $modePolicy)) { throw "Policy error: mode '$Mode' includes write-capable tools." }
+    $resourceProfilesPath = Join-Path $agentsRoot 'resource-profiles.json'
+    if (-not (Test-Path -LiteralPath $resourceProfilesPath)) { throw "Missing resource profile file: $resourceProfilesPath" }
+    $resourceProfiles = Get-Content -LiteralPath $resourceProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($ResourceProfile)) { $ResourceProfile = [string]$resourceProfiles.defaultProfile }
+    $profileDefinition = $resourceProfiles.profiles.PSObject.Properties[$ResourceProfile]
+    if ($null -eq $profileDefinition) { throw "Unknown resource profile: $ResourceProfile" }
+    $profileLimits = $profileDefinition.Value
+    $hardLimits = $resourceProfiles.hardLimits
+    $script:ResourceProfileName = $ResourceProfile
+
     if ((-not $maxBudgetProvided) -and $budgetProvided -and $BudgetUsd -ge 0) { $MaxBudgetUsd = $BudgetUsd; $maxBudgetProvided = $true }
-    if ((-not $maxBudgetProvided) -and $localConfig) {
-        $localProps = $localConfig.PSObject.Properties
-        if ($localProps['maxBudgetUsd']) { $MaxBudgetUsd = [decimal]$localProps['maxBudgetUsd'].Value }
-    }
-    if ((-not $maxBudgetProvided) -and (-not $localConfig) -and $policy.defaultBudgetUsd) { $MaxBudgetUsd = [decimal]$policy.defaultBudgetUsd }
+    if (-not $maxBudgetProvided) { $MaxBudgetUsd = [decimal]$profileLimits.maxBudgetUsd }
+    if (-not $maxTurnsProvided) { $MaxTurns = [int]$profileLimits.maxTurns }
+    if (-not $maxFilesReadProvided) { $MaxFilesRead = [int]$profileLimits.maxFilesRead }
+    if (-not $maxCommandsProvided) { $MaxCommands = [int]$profileLimits.maxCommands }
+    if (-not $workerTimeoutProvided) { $WorkerTimeoutSeconds = [int]$profileLimits.timeoutSeconds }
     if ($MaxBudgetUsd -le 0) { throw "MaxBudgetUsd must be a positive number." }
-    if ($MaxBudgetUsd -gt 5.00) { throw "MaxBudgetUsd must be less than or equal to 5.00. Refusing requested value: $MaxBudgetUsd" }
+    if ($MaxBudgetUsd -gt [decimal]$hardLimits.maxBudgetUsd) { throw "MaxBudgetUsd must be less than or equal to $($hardLimits.maxBudgetUsd). Refusing requested value: $MaxBudgetUsd" }
+    foreach ($limitCheck in @(
+        @{ name = 'MaxTurns'; value = $MaxTurns; hard = [int]$hardLimits.maxTurns },
+        @{ name = 'MaxFilesRead'; value = $MaxFilesRead; hard = [int]$hardLimits.maxFilesRead },
+        @{ name = 'MaxCommands'; value = $MaxCommands; hard = [int]$hardLimits.maxCommands },
+        @{ name = 'WorkerTimeoutSeconds'; value = $WorkerTimeoutSeconds; hard = [int]$hardLimits.timeoutSeconds }
+    )) {
+        if ($limitCheck.value -lt 1) { throw "$($limitCheck.name) must be 1 or higher." }
+        if ($limitCheck.value -gt $limitCheck.hard) { throw "$($limitCheck.name) must be less than or equal to $($limitCheck.hard). Refusing requested value: $($limitCheck.value)" }
+    }
     $BudgetUsd = $MaxBudgetUsd
+    $script:ResourceLimits = [ordered]@{
+        maxBudgetUsd = $MaxBudgetUsd
+        maxTurns = $MaxTurns
+        maxFilesRead = $MaxFilesRead
+        maxCommands = $MaxCommands
+        timeoutSeconds = $WorkerTimeoutSeconds
+    }
     $effectiveBare = -not [bool]$NoBare
     if ($Bare) { $effectiveBare = $true }
 
@@ -544,6 +595,14 @@ try {
     $hasApproval = -not [string]::IsNullOrWhiteSpace($ApprovedBy) -and -not [string]::IsNullOrWhiteSpace($ApprovalReason)
     $violations = @(Get-PolicyViolations -TaskText $Task -Mode $Mode -HasApproval $hasApproval -AllowNetwork ([bool]$AllowNetwork) -AllowDependencyInstall ([bool]$AllowDependencyInstall) -AllowGitWrite ([bool]$AllowGitWrite) -AllowRecursiveDelete ([bool]$AllowRecursiveDelete) -ExternalAllowDirs $resolvedAllowDirs)
 
+    $workspaceDirectoryNames = @()
+    $workspaceRoot = Join-Path $projectRoot 'workspace'
+    if (Test-Path -LiteralPath $workspaceRoot -PathType Container) {
+        $workspaceDirectoryNames = @(Get-ChildItem -LiteralPath $workspaceRoot -Directory -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { $_.Name })
+    }
+    $workspaceDirectoryJson = ConvertTo-Json -InputObject @($workspaceDirectoryNames) -Compress
+
+    $finalizationTurn = [Math]::Max(5, [Math]::Floor($MaxTurns * 0.66))
     $systemPrompt = @"
 You are Claude Code running as a bounded worker for Codex.
 
@@ -561,17 +620,52 @@ Hard boundaries:
 
 Mode:
 - Current mode is '$Mode'.
+- Resource profile is '$ResourceProfile'.
 - In plan and review modes, do not modify files.
 - In run mode, make only the requested project-local ordinary changes and stop if risky action is needed.
+
+Project-local discovery context:
+- Existing immediate subdirectories under workspace/ (JSON names only): $workspaceDirectoryJson
+- This Harness-provided list is navigation metadata, not Worker Read evidence. Do not include a directory in "files_read" unless a real Read tool event successfully read a file inside it.
+- When a natural-language request omits a path, use these existing names to locate likely project candidates before concluding that the target is missing. Inspect only the most relevant candidate files.
 
 Efficiency limits:
 - Keep output concise JSON. Do not quote full file contents.
 - Prefer the provided context files before broad searches.
-- Soft limits: read at most $MaxFilesRead files and run at most $MaxCommands shell commands.
+- Resource limits: use at most $MaxTurns assistant turns, read at most $MaxFilesRead files, and run at most $MaxCommands shell commands.
+- In plan mode, begin with files named by the task, then follow only direct dependencies needed to answer it. Avoid unrelated repository-wide exploration.
+- In plan mode, when the task identifies a target directory, list it once and read the relevant files that actually exist. Do not probe guessed README, package, src, or alternate paths unless an observed file directly requires them.
+- In plan mode, stop all tool use by turn $finalizationTurn at the latest. Use the remaining turns only to produce the required JSON audit object; never replace it with a Markdown analysis.
+- Reserve enough time and budget to produce the required final JSON. If the remaining boundary is insufficient, stop exploring and report the limitation in "risks" or "blocked_on".
 
-Required response shape:
-- Return JSON with: summary, files_read, changes_made, commands_run, tests_or_checks, risks, blocked_on.
-- If you need Codex approval, put the exact request in blocked_on and stop.
+Final response audit contract (mandatory in plan, review, and run modes):
+- Your final assistant message must be exactly one valid JSON object and nothing else.
+- Do not use a Markdown code fence. Do not add prose, headings, or explanations before or after the JSON object.
+- Report only actions that actually occurred. Do not claim a file read, command, change, or check unless you performed it.
+- "files_read" must list every file actually read. Put unmet approval or other blockers in "blocked_on" and stop.
+
+Mode-specific audit rules:
+- plan: this mode analyzes the project and proposes an execution plan; it does not report completed implementation work.
+- plan: require "summary", "files_read", "proposed_changes", "risks", and "blocked_on". "proposed_changes" must be a non-empty array describing concrete future edits.
+- plan: the normal human approval that follows a completed plan is a Workflow transition, not a Worker blocker. Do not put "awaiting approval" or equivalent text in "blocked_on"; normally return an empty array. Use "blocked_on" only when missing information or an external dependency prevents you from completing the plan itself.
+- plan: do not modify files. "changes_made" and "commands_run" are optional, but if present they must be empty arrays. "tests_or_checks" is optional and is not required for success.
+- review: act as a focused change verifier, not a general repository exploration agent. The task prompt should provide the original request, plan result, run result, changes_made, and modified-file list.
+- review: treat the original request as the acceptance criteria and the reported modified files as the primary review scope. Read every reported modified file first. Follow only direct imports or dependencies when they are necessary to validate the change.
+- review: verify requirement fit, whether the reported files are appropriate, obvious regressions to existing behavior, and concrete risks. Do not scan the whole repository, inspect unrelated history, search another workspace, or use Git/Bash commands.
+- review: if the task prompt does not identify the modified files or lacks enough plan/run context to verify the change, record the missing evidence in "blocked_on" instead of expanding the search scope.
+- review: stop after collecting bounded evidence for those checks and reserve time to emit the final JSON. Do not modify files; require the seven execution-audit fields, "changes_made" must be an empty array, and accurately report files read. "commands_run" must be an empty array because shell commands are not allowed.
+- run: set "run_result" to an object with "type" equal to "modified" or "noop". For "noop", also provide a specific non-empty "reason" explaining why no modification was necessary.
+- run modified: "changes_made" must accurately list every modified file and must not be empty; "commands_run" must accurately list every executed command. Use an empty command array only when no command was executed.
+- run modified: Write, Edit, and MultiEdit results or returned file content are not verification evidence and do not count as reading a file.
+- run modified: after completing all writes and edits, use the Read tool once more on every file listed in "changes_made". Each final verification read must succeed and produce real Read "tool_use" and "tool_result" events before the final JSON is returned.
+- run modified: include those successful final Read targets in "files_read"; do not claim verification from content returned by Write or Edit.
+- run noop: "changes_made" must be an empty array, no Write/Edit/MultiEdit may occur, and the stated existing state must be inspected with at least one successful real Read event.
+- run noop: "tests_or_checks" must describe the check that proved no modification was needed, and "run_result.reason" must state the concrete reason.
+
+Required final JSON shapes (use the one for the current mode, replace values, and output without backticks):
+- plan: {"summary":"...","files_read":[],"proposed_changes":[],"risks":[],"blocked_on":[]}
+- review: {"summary":"...","files_read":[],"changes_made":[],"commands_run":[],"tests_or_checks":[],"risks":[],"blocked_on":[]}
+- run: {"summary":"...","files_read":[],"changes_made":[],"commands_run":[],"tests_or_checks":[],"risks":[],"blocked_on":[],"run_result":{"type":"modified"}}
 "@
     if ($resolvedAllowDirs.Count -gt 0) {
         $systemPrompt += "`nExplicit one-time external directories approved for this run:`n"
@@ -587,24 +681,51 @@ Required response shape:
         runId = $runId; mode = $Mode; projectRoot = $projectRoot; agentsRoot = $agentsRoot; runRoot = $runInfo.runRoot
         preferredRunRoot = $runInfo.preferredRunRoot; fallbackRunRoot = $runInfo.fallbackRunRoot; startedAt = (Get-Date).ToString('o')
         budgetUsd = $BudgetUsd; permissionMode = $modePolicy.permissionMode; outputFormat = $modePolicy.outputFormat; allowedTools = $modePolicy.allowedTools
+        resourceProfile = $ResourceProfile; resourceLimits = $script:ResourceLimits
         model = if ($Model) { $Model } else { '<claude-default>' }; bare = [bool]$effectiveBare; dryRun = [bool]$DryRun; mockWorker = [bool]$MockWorker
         workerTimeoutSeconds = $WorkerTimeoutSeconds
         approvedBy = Protect-Text $ApprovedBy; approvalReason = Protect-Text $ApprovalReason
-        externalAllowDirs = $resolvedAllowDirs; contextFiles = $resolvedContextFiles; maxFilesRead = $MaxFilesRead; maxCommands = $MaxCommands
+        externalAllowDirs = $resolvedAllowDirs; contextFiles = $resolvedContextFiles; maxTurns = $MaxTurns; maxFilesRead = $MaxFilesRead; maxCommands = $MaxCommands
         allowNetwork = [bool]$AllowNetwork; allowDependencyInstall = [bool]$AllowDependencyInstall; allowGitWrite = [bool]$AllowGitWrite; allowRecursiveDelete = [bool]$AllowRecursiveDelete
     }
+    $systemPromptPath = Join-Path $runDir 'system-prompt.txt'
     Save-Json -Value $meta -Path (Join-Path $runDir 'meta.json') -Depth 10
     Write-Utf8Text -Path (Join-Path $runDir 'prompt.txt') -Text $prompt
-    Write-Utf8Text -Path (Join-Path $runDir 'system-prompt.txt') -Text (Protect-Text $systemPrompt)
+    Write-Utf8Text -Path $systemPromptPath -Text (Protect-Text $systemPrompt)
 
     if ($violations.Count -gt 0) {
         $normalized = New-NormalizedResult -Status 'policy_blocked' -Mode $Mode -Summary 'Worker run blocked by local policy before invoking Claude.' -BlockedOn $violations -Artifacts @{ run_dir = $runDir }
         Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status 'policy_blocked' -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath
     }
 
+    $arrayProperty = [ordered]@{ type = 'array'; items = [ordered]@{} }
+    $auditProperties = [ordered]@{
+        summary = [ordered]@{ type = 'string'; minLength = 1 }
+        files_read = $arrayProperty
+        proposed_changes = [ordered]@{ type = 'array'; items = [ordered]@{}; minItems = if ($Mode -eq 'plan') { 1 } else { 0 } }
+        changes_made = $arrayProperty
+        commands_run = $arrayProperty
+        tests_or_checks = $arrayProperty
+        risks = $arrayProperty
+        blocked_on = $arrayProperty
+        run_result = [ordered]@{
+            type = 'object'
+            properties = [ordered]@{ type = [ordered]@{ type = 'string'; enum = @('modified', 'noop') }; reason = [ordered]@{ type = 'string' } }
+            required = @('type')
+            additionalProperties = $true
+        }
+    }
+    $auditRequired = switch ($Mode) {
+        'plan' { @('summary', 'files_read', 'proposed_changes', 'risks', 'blocked_on') }
+        'review' { @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on') }
+        'run' { @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on', 'run_result') }
+    }
+    $auditJsonSchema = [ordered]@{ type = 'object'; properties = $auditProperties; required = $auditRequired; additionalProperties = $false } | ConvertTo-Json -Depth 10 -Compress
+    $auditJsonSchemaCli = $auditJsonSchema -replace '"', '\"'
+
     $claudeArgs = @()
     if ($effectiveBare) { $claudeArgs += '--bare' }
-    $claudeArgs += @('-p', '--permission-mode', [string]$modePolicy.permissionMode, '--output-format', 'stream-json', '--verbose', '--max-budget-usd', ([string]$BudgetUsd), '--system-prompt', $systemPrompt)
+    $claudeArgs += @('-p', '--permission-mode', [string]$modePolicy.permissionMode, '--output-format', 'stream-json', '--verbose', '--max-budget-usd', ([string]$BudgetUsd), '--system-prompt-file', $systemPromptPath, '--json-schema', $auditJsonSchemaCli)
     if ($modePolicy.allowedTools -and $modePolicy.allowedTools.Count -gt 0) { $claudeArgs += '--allowedTools'; $claudeArgs += ($modePolicy.allowedTools -join ',') }
     if ($modePolicy.disallowedTools -and $modePolicy.disallowedTools.Count -gt 0) { $claudeArgs += '--disallowedTools'; $claudeArgs += ($modePolicy.disallowedTools -join ',') }
     if ($Model) { $claudeArgs += '--model'; $claudeArgs += $Model }
@@ -625,11 +746,13 @@ Required response shape:
         $mockWorkerResult = [ordered]@{
             summary = "Mock worker completed successfully."
             files_read = @()
+            proposed_changes = if ($Mode -eq 'plan') { @('Mock worker proposed no project-local implementation details.') } else { @() }
             changes_made = @()
             commands_run = @()
             tests_or_checks = @("mock worker path exercised")
             risks = @()
             blocked_on = $mockBlockedOn
+            run_result = if ($Mode -eq 'run') { [ordered]@{ type = 'noop'; reason = 'Mock worker did not request a project modification.' } } else { $null }
         }
         $mockCliResult = [ordered]@{
             type = 'result'
@@ -669,7 +792,7 @@ Required response shape:
             Stop-Job -Job $job | Out-Null
             Remove-Job -Job $job -Force | Out-Null
             Write-Utf8Text -Path $stderrPath -Text "Claude worker timed out after $WorkerTimeoutSeconds seconds."
-            $normalized = New-NormalizedResult -Status 'worker_failed' -Mode $Mode -Summary 'Claude worker timed out before returning a result.' -BlockedOn @('worker_timeout') -SupervisorNotes @('No structured worker result was returned before timeout. Check the Claude Code provider, authentication, model mapping, and non-interactive execution path.') -ArtifactStatus 'worker_failed_no_artifact_claim' -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_error = $stderrPath } -ErrorObject @{ code = 'worker_timeout'; message = "Claude worker timed out after $WorkerTimeoutSeconds seconds." }
+            $normalized = New-NormalizedResult -Status 'worker_failed' -Mode $Mode -Summary 'Claude worker timed out before returning a result.' -BlockedOn @('timeout') -SupervisorNotes @('No structured worker result was returned before timeout. Check the Claude Code provider, authentication, model mapping, and non-interactive execution path.') -ArtifactStatus 'worker_failed_no_artifact_claim' -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_error = $stderrPath } -ErrorObject @{ code = 'timeout'; message = "Claude worker timed out after $WorkerTimeoutSeconds seconds." }
             Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status 'worker_failed' -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath
         }
         $jobResult = Receive-Job -Job $job
@@ -720,9 +843,13 @@ Required response shape:
         $risksFromWorker += 'Recovered worker result from non-strict Claude CLI output.'
     }
     $filesRead = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'files_read'))
+    $proposedChanges = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'proposed_changes'))
     $changesMade = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'changes_made'))
     $commandsRun = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'commands_run'))
     $testsOrChecks = @(ConvertTo-Array (Get-PropValue -Object $workerResult -Name 'tests_or_checks'))
+    $runResult = Get-PropValue -Object $workerResult -Name 'run_result'
+    $runResultType = ([string](Get-PropValue -Object $runResult -Name 'type')).Trim().ToLowerInvariant()
+    $runResultReason = ([string](Get-PropValue -Object $runResult -Name 'reason')).Trim()
     $toolAudit = Get-ToolAudit -Events $streamEvents
     Save-Json -Value $toolAudit -Path $toolEventsPath -Depth 20
     $successfulCalls = @($toolAudit.tool_calls | Where-Object { $_.succeeded -eq $true -and $_.denied -ne $true })
@@ -730,24 +857,72 @@ Required response shape:
     $successfulCommands = @($successfulCalls | Where-Object { $_.tool -match '^(Bash|Shell)$' } | ForEach-Object { [string](Get-PropValue -Object $_.input -Name 'command') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $successfulReadCalls = @($successfulCalls | Where-Object { $_.tool -match '^(Read|Glob|Grep|LS)$' })
     $successfulWriteCalls = @($successfulCalls | Where-Object { $_.tool -match '^(Write|Edit|MultiEdit)$' })
+    $observedTurns = @($streamEvents | Where-Object { (Get-PropValue -Object $_ -Name 'type') -eq 'assistant' }).Count
+    $resourceUsage = [ordered]@{
+        turns = $observedTurns
+        toolCalls = $successfulCalls.Count
+        filesRead = $successfulReadCalls.Count
+        commands = $successfulCommands.Count
+        costUsd = $cost
+    }
     $auditIssues = @()
-    foreach ($requiredField in @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on')) {
+    $requiredFields = if ($Mode -eq 'plan') {
+        @('summary', 'files_read', 'proposed_changes', 'risks', 'blocked_on')
+    } else {
+        @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on')
+    }
+    foreach ($requiredField in $requiredFields) {
         if (-not (Test-PropExists -Object $workerResult -Name $requiredField)) {
             $auditIssues += "missing_required_field:$requiredField"
         }
     }
+    if (($Mode -eq 'run') -and -not (Test-PropExists -Object $workerResult -Name 'run_result')) {
+        $auditIssues += 'missing_required_field:run_result'
+    }
     if ($recoveredWorkerOutput) {
         $auditIssues += 'non_strict_output_recovered'
     }
+    if ($observedTurns -gt $MaxTurns) { $auditIssues += "resource_limit_exceeded:maxTurns:$observedTurns>$MaxTurns" }
+    if ($successfulReadCalls.Count -gt $MaxFilesRead) { $auditIssues += "resource_limit_exceeded:maxFilesRead:$($successfulReadCalls.Count)>$MaxFilesRead" }
+    if ($successfulCommands.Count -gt $MaxCommands) { $auditIssues += "resource_limit_exceeded:maxCommands:$($successfulCommands.Count)>$MaxCommands" }
     if (-not $MockWorker) {
-        if (($Mode -eq 'plan' -or $Mode -eq 'review') -and (($filesRead.Count + $commandsRun.Count + $testsOrChecks.Count) -eq 0)) {
-            $auditIssues += 'missing_read_or_check_evidence'
+        if (($Mode -eq 'plan') -and (($filesRead.Count -eq 0) -or ($successfulReadCalls.Count -eq 0))) {
+            $auditIssues += 'missing_read_evidence'
         }
-        if (($Mode -eq 'run') -and ($changesMade.Count -eq 0)) {
-            $auditIssues += 'missing_change_evidence'
+        if (($Mode -eq 'plan') -and ($proposedChanges.Count -eq 0)) {
+            $auditIssues += 'missing_proposed_changes'
+        }
+        if (($Mode -eq 'plan') -and ($changesMade.Count -gt 0)) {
+            $auditIssues += 'plan_contract_violation:changes_made_must_be_empty'
+        }
+        if (($Mode -eq 'review') -and (($filesRead.Count + $commandsRun.Count + $testsOrChecks.Count) -eq 0)) {
+            $auditIssues += 'missing_read_or_check_evidence'
         }
         if (($Mode -eq 'run') -and ($testsOrChecks.Count -eq 0)) {
             $auditIssues += 'missing_test_or_check_evidence'
+        }
+        if ($Mode -eq 'run') {
+            if ($runResultType -notin @('modified', 'noop')) {
+                $auditIssues += 'invalid_run_result:type_must_be_modified_or_noop'
+            } elseif ($runResultType -eq 'modified') {
+                if ($changesMade.Count -eq 0) { $auditIssues += 'missing_change_evidence' }
+                foreach ($changedFile in $changesMade) {
+                    $reportedChange = ConvertTo-AuditPath $changedFile
+                    $verifiedChange = $false
+                    foreach ($call in $successfulReadCalls) {
+                        foreach ($field in @('file_path', 'path')) {
+                            $target = ConvertTo-AuditPath (Get-PropValue -Object $call.input -Name $field)
+                            if ($target -and ($target -eq $reportedChange -or $target.EndsWith('/' + $reportedChange) -or $reportedChange.EndsWith('/' + $target))) { $verifiedChange = $true }
+                        }
+                    }
+                    if (-not $verifiedChange) { $auditIssues += 'file_audit_mismatch:modified_file_not_verified_by_read'; break }
+                }
+            } elseif ($runResultType -eq 'noop') {
+                if ($changesMade.Count -gt 0) { $auditIssues += 'noop_contract_violation:changes_made_must_be_empty' }
+                if ($successfulWriteCalls.Count -gt 0) { $auditIssues += 'noop_contract_violation:write_event_observed' }
+                if ($successfulReadCalls.Count -eq 0) { $auditIssues += 'noop_contract_violation:missing_read_evidence' }
+                if ([string]::IsNullOrWhiteSpace($runResultReason)) { $auditIssues += 'noop_contract_violation:missing_reason' }
+            }
         }
         if ($changesMade.Count -eq 0 -and $successfulWriteCalls.Count -gt 0) {
             $auditIssues += 'file_audit_mismatch:observed_write_not_reported'
@@ -766,11 +941,11 @@ Required response shape:
             }
         }
         foreach ($reportedFile in $filesRead) {
-            $reported = ([string]$reportedFile).Replace('\', '/').TrimStart('./')
+            $reported = ConvertTo-AuditPath $reportedFile
             $matched = $false
             foreach ($call in $successfulReadCalls) {
                 foreach ($field in @('file_path', 'path')) {
-                    $target = ([string](Get-PropValue -Object $call.input -Name $field)).Replace('\', '/').TrimStart('./')
+                    $target = ConvertTo-AuditPath (Get-PropValue -Object $call.input -Name $field)
                     if ($target -and ($target -eq $reported -or $target.EndsWith('/' + $reported) -or $reported.EndsWith('/' + $target))) { $matched = $true }
                 }
             }
@@ -802,22 +977,33 @@ Required response shape:
     if ($status -eq 'success' -and $auditIssues.Count -gt 0) {
         $status = 'worker_failed'
     }
-    $err = if ($auditIssues.Count -gt 0) {
+    $upstreamWorkerFailed = ($claudeExitCode -ne 0) -or ($isError -eq $true) -or ([string]$isError -eq 'true') -or ([string]$subtype -like 'error_*')
+    $errorMessage = if ($claudeErrors.Count -gt 0) {
+        [string]$claudeErrors[0]
+    } elseif ($stderrText) {
+        $stderrText
+    } elseif ($upstreamWorkerFailed -and $summaryValue) {
+        [string]$summaryValue
+    } elseif ($subtype -and ([string]$subtype -ne 'success')) {
+        [string]$subtype
+    } else {
+        'Claude worker failed.'
+    }
+    $err = if ($subtype -eq 'error_max_budget_usd') {
+        $summary = 'Claude worker exceeded the hard budget limit before returning the required audit result.'
+        if ($blockedOn -notcontains 'budget_exceeded') { $blockedOn += 'budget_exceeded' }
+        @{ code = 'budget_exceeded'; message = $errorMessage }
+    } elseif ($parseError) {
+        $summary = 'Claude worker returned invalid JSON.'
+        @{ code = 'invalid_json'; message = $parseError }
+    } elseif ($upstreamWorkerFailed) {
+        $summary = 'Claude worker terminated before completing the task.'
+        @{ code = 'worker_crash'; message = $errorMessage }
+    } elseif ($auditIssues.Count -gt 0) {
         @{ code = 'audit_validation_failed'; message = ($auditIssues -join ', ') }
-    } elseif ($parseError -and -not $recoveredWorkerOutput) {
-        @{ code = 'invalid_worker_json'; message = $parseError }
     } elseif ($status -ne 'success') {
-        $errorMessage = if ($claudeErrors.Count -gt 0) { [string]$claudeErrors[0] } elseif ($stderrText) { $stderrText } elseif ($subtype) { [string]$subtype } else { 'Claude worker failed.' }
-        if ($subtype -eq 'error_max_budget_usd') {
-            $summary = 'Claude worker reached maximum budget.'
-            if ($blockedOn -notcontains 'max_budget_usd') { $blockedOn += 'max_budget_usd' }
-            @{ code = 'max_budget_usd'; message = $errorMessage }
-        } elseif ($subtype -or $isError) {
-            $errorCode = if ($subtype) { [string]$subtype } else { 'claude_failed' }
-            @{ code = $errorCode; message = $errorMessage }
-        } else {
-            @{ code = 'claude_failed'; message = $errorMessage }
-        }
+        $blockedMessage = if ($blockedOn.Count -gt 0) { $blockedOn -join '; ' } else { $errorMessage }
+        @{ code = 'worker_blocked'; message = $blockedMessage }
     } else { $null }
     $supervisorNotes = @()
     $artifactStatus = if ($status -eq 'success') { 'worker_reported_success' } else { 'worker_failed_no_artifact_claim' }
@@ -835,11 +1021,13 @@ Required response shape:
 
     $normalized = New-NormalizedResult -Status $status -Mode $Mode -Summary $summary `
         -FilesRead $filesRead `
+        -ProposedChanges $proposedChanges `
         -ChangesMade $changesMade `
         -CommandsRun $commandsRun `
         -TestsOrChecks $testsOrChecks `
         -Risks $risksFromWorker `
         -BlockedOn $blockedOn `
+        -RunResult $runResult `
         -ObservedTools @($toolAudit.observed_tools) `
         -ObservedCommands @($toolAudit.observed_commands) `
         -PermissionDenials @($toolAudit.permission_denials) `
@@ -847,11 +1035,11 @@ Required response shape:
         -AuditIssues $auditIssues `
         -SupervisorNotes $supervisorNotes `
         -ArtifactStatus $artifactStatus `
-        -Cost $cost -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_events = $eventStreamPath; raw_error = $stderrPath; tool_events = $toolEventsPath } -ErrorObject $err
+        -Cost $cost -ResourceUsage $resourceUsage -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_events = $eventStreamPath; raw_error = $stderrPath; tool_events = $toolEventsPath } -ErrorObject $err
     Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status $status -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath -ClaudeExitCode $claudeExitCode
 } catch {
     $message = $_.Exception.Message
-    $status = if ($message -match 'TaskFile must be|InputJson must be|Provide either|ContextFiles must be|WorkerTimeoutSeconds|Cannot bind|Mode') { 'invalid_input' } else { 'environment_failed' }
+    $status = if ($message -match 'TaskFile must be|InputJson must be|Provide either|ContextFiles must be|WorkerTimeoutSeconds|MaxTurns|MaxFilesRead|MaxCommands|MaxBudgetUsd|resource profile|Resource limit|Cannot bind|Mode') { 'invalid_input' } else { 'environment_failed' }
     Write-Utf8Text -Path $stderrPath -Text $message
     $normalized = New-NormalizedResult -Status $status -Mode $Mode -Summary $message -ErrorObject @{ code = $status; message = $message } -Artifacts @{ run_dir = $runDir }
     Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status $status -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath

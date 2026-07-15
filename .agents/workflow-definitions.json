@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "defaultDefinition": "software_change",
+  "definitions": {
+    "software_change": {
+      "description": "Plan, approve, implement, and review one bounded software change.",
+      "planning": {
+        "reason": "The request requires a bounded change to existing software behavior.",
+        "priority": 0,
+        "matchAny": []
+      },
+      "constraints": [
+        "Implementation requires explicit human approval.",
+        "Changes remain inside the configured project and Harness safety boundary.",
+        "The final change must pass focused review."
+      ],
+      "stages": [
+        {
+          "id": "planning",
+          "role": "planner",
+          "mode": "plan",
+          "promptKind": "planner",
+          "requiresApproval": false,
+          "resourceProfile": "exploration_readonly"
+        },
+        {
+          "id": "implementation",
+          "role": "coder",
+          "mode": "run",
+          "promptKind": "coder",
+          "requiresApproval": true,
+          "resourceProfile": "small_change"
+        },
+        {
+          "id": "review",
+          "role": "reviewer",
+          "mode": "review",
+          "promptKind": "reviewer",
+          "requiresApproval": false,
+          "resourceProfile": "review_readonly"
+        }
+      ]
+    },
+    "analysis_only": {
+      "description": "Explore and explain the project without modifying files.",
+      "planning": {
+        "reason": "The request asks for project analysis or an architectural explanation and does not require implementation.",
+        "priority": 10,
+        "matchAny": [
+          "分析", "审查", "解释", "说明架构", "架构说明", "analyze", "analyse", "explain", "architecture review", "code review"
+        ],
+        "excludeAny": [
+          "增加", "新增", "修改", "修复", "实现", "add ", "change ", "fix ", "implement "
+        ]
+      },
+      "constraints": [
+        "Read-only analysis; no file modifications.",
+        "Stay inside the configured project.",
+        "Report evidence, risks, and blockers through the plan audit contract."
+      ],
+      "stages": [
+        {
+          "id": "analysis",
+          "role": "planner",
+          "mode": "plan",
+          "promptKind": "planner",
+          "requiresApproval": false,
+          "resourceProfile": "exploration_readonly"
+        }
+      ]
+    },
+    "documentation_change": {
+      "description": "Plan, approve, apply, and review a bounded documentation-only change.",
+      "planning": {
+        "reason": "The request is specifically about README, documentation, or usage guidance.",
+        "priority": 20,
+        "matchAny": [
+          "readme", "文档", "说明书", "使用说明", "documentation", "docs/", "guide"
+        ]
+      },
+      "constraints": [
+        "Implementation requires explicit human approval.",
+        "Only documentation files may be changed.",
+        "Code and runtime behavior must remain unchanged."
+      ],
+      "stages": [
+        {
+          "id": "planning",
+          "role": "planner",
+          "mode": "plan",
+          "promptKind": "planner",
+          "requiresApproval": false,
+          "resourceProfile": "small_readonly"
+        },
+        {
+          "id": "documentation",
+          "role": "coder",
+          "mode": "run",
+          "promptKind": "coder",
+          "requiresApproval": true,
+          "resourceProfile": "small_change"
+        },
+        {
+          "id": "review",
+          "role": "reviewer",
+          "mode": "review",
+          "promptKind": "reviewer",
+          "requiresApproval": false,
+          "resourceProfile": "review_readonly"
+        }
+      ]
+    }
+  }
+}

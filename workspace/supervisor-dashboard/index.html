@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Supervisor</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark">S</span><span><strong>Supervisor</strong><small>Personal development runtime</small></span></a>
+    <div class="connection"><span id="connection-dot" class="connection-dot"></span><span><strong id="connection">Connecting</strong><small id="last-updated">Waiting for runtime</small></span><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button></div>
+  </header>
+
+  <main class="page-shell">
+    <section class="new-task-card">
+      <div><p class="eyebrow">Start a supervised workflow</p><h1>What would you like to change?</h1><p class="lede">Describe the outcome in plain language. Supervisor will plan the work first and pause before any file changes.</p></div>
+      <form id="new-task-form" class="new-task-form">
+        <label class="sr-only" for="user-request">Development request</label>
+        <textarea id="user-request" name="userRequest" maxlength="5000" required placeholder="For example: 给任务看板增加导出 JSON 功能"></textarea>
+        <div class="form-footer"><span>Planning is read-only · execution always requires approval</span><button id="create-task" class="primary-button" type="submit">Create workflow</button></div>
+      </form>
+      <div id="action-message" class="action-message" role="status" aria-live="polite"></div>
+      <div id="project-confirmation" class="project-confirmation hidden">
+        <div><p class="eyebrow">Project confirmation</p><h2>Which registered project should Supervisor use?</h2><p>No Worker or Workflow starts until this ambiguity is resolved.</p></div>
+        <label>Target project<select id="project-options"></select></label>
+        <div class="approval-actions"><button id="cancel-project" class="danger-button" type="button">Cancel</button><button id="confirm-project" class="primary-button" type="button">Confirm project</button></div>
+      </div>
+    </section>
+
+    <section id="overview" class="overview-grid" aria-label="Workflow overview"></section>
+
+    <div class="console-grid">
+      <aside class="recent-panel panel">
+        <div class="panel-heading"><div><p class="eyebrow">Activity</p><h2>Recent work</h2></div><span id="workflow-count" class="count">0</span></div>
+        <div id="workflow-list" class="workflow-list"><div class="empty-state">No workflows yet.</div></div>
+      </aside>
+
+      <section class="detail-column">
+        <article id="workflow-empty" class="panel empty-hero"><div><span class="empty-icon">◇</span><h2>Select a workflow</h2><p>Planning, approval, implementation, and review will appear here.</p></div></article>
+
+        <div id="workflow-detail" class="hidden">
+          <article class="panel workflow-hero">
+            <div class="hero-heading"><div><p class="eyebrow" id="workflow-type">Workflow</p><h2 id="workflow-request">Request</h2></div><span id="workflow-status"></span></div>
+            <div id="workflow-summary" class="hero-metrics"></div>
+            <div id="next-action" class="next-action"></div>
+          </article>
+
+          <article id="decision-panel" class="panel decision-panel">
+            <div class="panel-heading"><div><p class="eyebrow">GPT Supervisor</p><h2>Decision</h2></div><span id="decision-source">Persisted before Workflow</span></div>
+            <div id="decision-content" class="decision-content"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">Progress</p><h2>Stage timeline</h2></div><span id="stage-progress"></span></div>
+            <div id="stage-timeline" class="stage-timeline"></div>
+          </article>
+
+          <article id="approval-panel" class="panel approval-panel hidden">
+            <div class="approval-heading"><div><p class="eyebrow">Human checkpoint</p><h2 id="approval-title">Approval required</h2><p id="approval-reason"></p></div><span class="shield">⌾</span></div>
+            <div id="approval-preview" class="approval-preview"></div>
+            <form id="approval-form" class="approval-form">
+              <label>Reviewer name<input id="reviewer-name" maxlength="100" required placeholder="Your name"></label>
+              <label>Decision reason<textarea id="decision-reason" maxlength="1000" required placeholder="Why is this bounded change safe to run?"></textarea></label>
+              <div class="approval-actions"><button id="reject-workflow" class="danger-button" type="button">Reject</button><button id="approve-workflow" class="primary-button" type="submit">Approve and run</button></div>
+            </form>
+          </article>
+
+          <section id="result-grid" class="result-grid"></section>
+
+          <article class="panel policy-panel">
+            <div class="panel-heading"><div><p class="eyebrow">Safety</p><h2>Execution policy</h2></div><span>Enforced locally</span></div>
+            <div id="execution-policy" class="policy-grid"></div>
+          </article>
+
+          <details class="panel advanced-panel">
+            <summary><span><strong>Technical details</strong><small>Task IDs, attempts, artifacts, and runtime events</small></span><span>Expand</span></summary>
+            <div class="advanced-content"><div id="technical-meta"></div><div id="task-list" class="technical-tasks"></div><div><div class="subheading"><h3>Event timeline</h3><span id="event-count">0</span></div><ol id="event-list" class="timeline"></ol></div></div>
+          </details>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

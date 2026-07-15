@@ -1,300 +1,253 @@
-# Codex-Claude Worker Harness
+# Supervisor v0.7 Release Candidate
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**Status: Alpha — dogfood validated, not production-ready.**
+Supervisor is a local, human-controlled development runtime for connecting ChatGPT Web to a bounded Claude Code worker. It turns one natural-language request into a durable workflow:
 
-A synchronous, supervised MCP bridge that lets ChatGPT Web delegate bounded project work to a local Claude Code worker. ChatGPT acts as the supervisor for requirement interpretation, planning, approval, and result review. Claude Code performs project-local reads, writes, edits, and approved checks. The Bridge and PowerShell Harness enforce policy, capture events, validate audit claims, normalize results, and maintain a local ledger.
+```text
+User request
+  -> Workflow planning
+  -> Read-only plan
+  -> Human approval
+  -> Bounded implementation
+  -> Focused review
+  -> Audited result
+```
 
-Codex is used to develop, debug, and recover this project; it is not the intended primary user interface. The intended Alpha workflow starts and ends in ChatGPT Web.
+The project does not build a new model or a general Agent platform. It reuses AI capabilities the user already has and focuses on stable, transparent, long-running local development work.
 
-> **This project is not a sandbox.** It is a guardrail and supervision layer for trusted local environments. Use a VM, container, restricted OS account, or another real isolation boundary for untrusted code.
+> **Beta means invite-only testing, not production isolation.** Supervisor provides policy, approval, resource, side-effect, and audit guardrails. It is not an operating-system sandbox. Use a restricted account, VM, or container for untrusted code.
 
-## Why this exists
+## What you get
 
-ChatGPT Web is useful for interactive requirement discovery and supervisory decisions, while a local code agent can inspect and change a real project. Used alone, however, a local worker is difficult to supervise from the browser: its permission requests, actual tool use, and reported results can diverge.
+- A local Supervisor Console for creating and following development requests.
+- Durable Workflow and Task state that survives browser or MCP client disconnection.
+- Data-driven selection among software change, analysis-only, and documentation workflows.
+- Explicit Approve / Reject controls before a write-capable Task exists.
+- Resource Profiles for budget, turns, file reads, commands, and timeout.
+- Focused post-change review with files, checks, risks, errors, cost, and usage.
+- Strict cross-validation between Worker JSON claims and observed Claude Code tool events.
+- A fixed MCP surface for ChatGPT Web through OpenAI Secure MCP Tunnel.
+- A persistent Supervisor Decision that records intent, goal, project, reasoning, Workflow type, confidence, and next action before a Workflow exists.
+- A registered Project Context layer that selects a unique target or pauses for explicit project confirmation.
+- An Approval Center with decision context, bounded cost estimate, observed file scope, and tool-evidence diffs.
 
-This project separates those responsibilities:
+## Supervisor Brain
 
-- **ChatGPT / GPT:** supervisor, requirement interpretation, planning, approval, and result review.
-- **Claude Code Worker:** bounded local execution, file inspection, and project-local implementation.
-- **Bridge / Harness:** policy enforcement, approval checks, event capture, audit validation, result normalization, budgets, timeouts, and ledger records.
+ChatGPT can attach a structured `supervisorDecision` to `cc_create_workflow`. The v0.7 contract records intent, technical goal, registered project, concise reasoning, risks, expected resources, recommended Workflow/actions, confidence, whether a Worker is needed, and the next action. The local Console uses the same Decision Layer with deterministic, explainable fallback rules when no model is present. Every Decision is persisted under `runtime-data/supervisor-decisions/` before it can reach the Workflow Runtime.
 
-The Alpha proves this synchronous control path. Durable background execution, automatic recovery, runtime approval queues, and notifications belong to Phase B and are not implemented.
+Projects are registered in `.agents/projects.json` with a stable ID, relative path, description, language, aliases, and runtime-derived `lastUsed`. A unique request match is selected automatically. If several projects remain plausible, Supervisor returns `project_confirmation_required`; no Workflow or Worker starts until the user confirms one of the registered candidates.
+
+The boundary is intentionally explicit:
+
+```text
+Supervisor Decision -> Project Context -> Workflow Planner -> Workflow Runtime -> Task Runtime
+```
+
+The expected GPT behavior is: decide whether a Worker is needed, query/select a registered project, produce the full Decision, and only then enter a Workflow. Explanations use `respond_directly`; project analysis uses `analysis_only`; code changes use `software_change`. Intent/Workflow mismatches and target guessing are rejected locally. The Decision Layer never creates a Task and cannot bypass Workflow approval. See [Supervisor Brain](docs/supervisor-brain.md).
+
+## Quick start on Windows
+
+Requirements:
+
+- Windows PowerShell 5.1 or PowerShell 7;
+- Node.js 20 or newer;
+- Claude Code CLI configured with a compatible model provider.
+
+Clone the repository, then run:
+
+```powershell
+.\install.ps1
+.\scripts\doctor.ps1
+.\start.ps1
+```
+
+Open the Dashboard URL printed by `start.ps1`, normally:
+
+```text
+http://127.0.0.1:8787/supervisor/
+```
+
+Enter a request such as:
+
+```text
+给任务看板增加导出 JSON 功能
+```
+
+Supervisor starts with a persisted Decision and read-only planning. The console shows Decision → Planning → Approval → Execution → Review, including technical summary, project stack/default constraints, proposed scope, combined risks, expected resources, Resource Profile hard caps, and estimated impact. Review that information, enter your name and decision reason, then explicitly Approve or Reject. Approval metadata is audit context, not identity verification.
+
+Before first use, review `.agents/projects.json`. Keep paths relative to `projectRoot`; register only directories the Supervisor should be allowed to target. When the Console asks for project confirmation, choosing a project still starts only the read-only Planner.
 
 ## Architecture
 
 ```text
-ChatGPT Web
-    |
-OpenAI Secure MCP Tunnel
-    |
-Local MCP Bridge (loopback)
-    |
-PowerShell Harness / Policy / Ledger
-    |
-Claude Code Worker
-    |
-Project workspace
+ChatGPT Web / Supervisor Console
+              |
+   MCP Bridge / local Product API
+              |
+     Supervisor Decision Layer
+              |
+       Project Context Layer
+              |
+      Workflow Planning Layer
+              |
+      Workflow Orchestrator
+              |
+         Task Runtime
+              |
+ Harness / Approval / Policy / Audit
+              |
+       Claude Code Worker
+              |
+       Project workspace
 ```
 
-### Core components
-
-| Component | Responsibility |
+| Layer | Responsibility |
 | --- | --- |
-| Cloud AI / ChatGPT Web | Interpret requirements, plan work, request approval, review evidence, and report results. |
-| Secure MCP Tunnel | Carry the outbound connection between ChatGPT and the loopback Bridge without directly publishing port 8787. |
-| Local MCP Bridge | Expose seven fixed Harness tools; it is not a generic shell or filesystem server. |
-| Harness / Policy / Approval | Enforce mode, path, tool, budget, timeout, and approval-metadata gates. |
-| Claude Code Worker | Perform bounded project-local reads, writes, and edits through the configured provider. |
-| Audit / Ledger | Persist stream events, cross-validate Worker claims, normalize results, and retain local review metadata. |
+| Supervisor Console | User request entry, recent work, approvals, results, and explainable safety status. |
+| Supervisor Decision | Persist intent, goal, target project, reasoning, confidence, constraints, and next action. It cannot create Tasks. |
+| Project Context | Resolve only registered project paths; stop for confirmation when selection is ambiguous. |
+| Workflow Planner | Select a data-driven Workflow Definition and record goal, reason, constraints, and stages. |
+| Workflow Orchestrator | Advance stages and create one Task at a time. It cannot synthesize approval. |
+| Task Runtime | Persist Task/Attempt lifecycle, heartbeat, events, cancellation, and restart recovery. |
+| Harness | Enforce project root, tools, approval metadata, resources, side effects, and audit contracts. |
+| Worker | Perform bounded reads and approved local edits through Claude Code. |
 
-The audit return path is separate from the Worker's self-report:
+The existing MCP tools remain compatible. The product console uses local Bridge product APIs that call the same Workflow Runtime and approval boundary; it never calls the Worker or Harness directly.
 
-```text
-Claude stream events
-    |
-claude-events.jsonl
-    |
-tool-events.json
-    |
-audit cross-validation
-    |
-worker-result.normalized.json
-    |
-cc_get_result / ChatGPT Supervisor
-```
+## Workflow types
 
-## What the Alpha provides
+Definitions live in `.agents/workflow-definitions.json`:
 
-- Separate `plan`, `review`, and approved `run` modes.
-- Explicit approval metadata for write-capable runs.
-- Project-root and external-directory boundaries.
-- Worker budgets, timeouts, and stable run IDs.
-- Read/Write/Edit/Bash policy using both `--allowedTools` and `--disallowedTools`.
-- Claude Code `stream-json --verbose` event capture.
-- Independent `observed_tools`, `observed_commands`, `permission_denials`, and read/write/edit targets.
-- Cross-validation between Worker claims and successful tool results through `audit_issues`.
-- Denied or failed tool calls never count as successful checks.
-- Full strict-JSON summaries without the former silent 300-character truncation.
-- File, directory, and symbolic-link side-effect detection for hardened write smoke tests.
-- Windows path safeguards and matching between absolute event paths and relative Worker reports.
-- Local normalized results and a project ledger for later review.
-- Result recovery by run ID when the browser-side synchronous call returns or times out first.
-
-The local dogfood flow has created a static Chinese task board through an approved write and then completed a follow-up feature iteration under GPT supervision. The dogfood files remain local and are intentionally not part of this repository.
-
-## MCP tools
-
-- `cc_ping` — check Bridge and Harness readiness.
-- `cc_plan_task` — run a read-only planning task.
-- `cc_review_task` — review a bounded project state without edits.
-- `cc_run_approved_task` — perform an explicitly approved write task.
-- `cc_get_latest_summary` — recover the latest summary, including incomplete runs.
-- `cc_get_ledger` — read recent local ledger entries.
-- `cc_get_result` — retrieve a complete normalized result by run ID or `latest`.
-
-Task tools accept `mockWorker: true` for transport tests without a paid Worker call. The default MCP budget is USD 0.20; it is an estimated Claude Code-side limit and can differ slightly from provider billing.
-
-## End-to-end demo
-
-```text
-user request -> plan -> user approval -> execute -> result recovery
-             -> read-only review -> independent acceptance -> final report
-```
-
-Follow the concrete two-file walkthrough in [End-to-End Supervised Demo](docs/demo.md). It shows the MCP calls, approval boundary, event fields, ledger check, and failure rules without adding Demo-only runtime features.
-
-## Quick start on Windows
-
-### Requirements
-
-- Windows PowerShell 5.1 or PowerShell 7
-- Node.js 18 or newer
-- Claude Code configured locally with a compatible provider
-- OpenAI Secure MCP Tunnel access and `tunnel-client` for ChatGPT Web integration
-- ChatGPT Developer mode for connecting the MCP app
-
-Clone or copy the project to a non-sensitive location such as `D:\path\to\project`. Never commit provider credentials, Tunnel IDs, local profiles, or proxy credentials.
-
-### Install and configure
-
-```powershell
-cd D:\path\to\project
-cd .\mcp-server
-npm ci
-cd ..
-.\scripts\init-config.ps1
-.\scripts\doctor.ps1
-```
-
-Review `.agents/policy.json`. Keep machine-specific overrides in ignored `.agents/local.config.json`.
-
-| File | Purpose | Commit it? |
+| Type | Intended use | Stages |
 | --- | --- | --- |
-| `.agents/policy.json` | Versioned modes, tool restrictions, and safety defaults. | Yes |
-| `.agents/local.config.json` | Machine-local budget override. | No |
-| `mcp-server/config.example.json` | Public Bridge configuration template. | Yes |
-| `mcp-server/config.json` | Local project root, port, timeout, origins, and optional approval defaults. | No |
-| Tunnel profile | Local Tunnel ID/profile state maintained by `tunnel-client`. | No |
+| `software_change` | Features and bug fixes | plan -> approval -> implementation -> review |
+| `analysis_only` | Architecture or project analysis | read-only analysis |
+| `documentation_change` | README and documentation edits | plan -> approval -> documentation change -> review |
 
-### Start the local Bridge
+The current Workflow Planner is deterministic and explainable. Ambiguous requests default to `software_change`; MCP callers can explicitly pass `definitionId` when operator control is preferred.
 
-Run the loopback Bridge in a dedicated terminal:
+## Approval and safety
+
+Before an approval-gated Stage:
+
+- no coder Task exists;
+- no write-capable Worker starts;
+- the console shows planner evidence and the selected Resource Profile;
+- Approve records the reviewer, reason, exact planner Task/Attempt, coder prompt hash, and capability boundary;
+- Reject ends the Workflow without creating a coder Task.
+
+Execution policy is shown in plain language in the console:
+
+**Allowed**
+
+- read files inside the configured project;
+- modify the approved workspace after explicit approval;
+- use tools allowed by the current mode and policy.
+
+**Blocked**
+
+- project-root escape;
+- unauthorized commands or writes in read-only stages;
+- approval-gated execution without approval;
+- results that fail the strict audit contract.
+
+These are guardrails, not process isolation. See [SECURITY.md](SECURITY.md).
+
+## Configuration and secrets
+
+Public, versioned configuration:
+
+- `.agents/policy.json` — mode and tool policy;
+- `.agents/resource-profiles.json` — resource envelopes and global hard limits;
+- `.agents/workflow-definitions.json` — Workflow selection metadata and stages;
+- `.agents/projects.json` — registered relative project paths and selection aliases;
+- `mcp-server/config.example.json` — placeholder-only Bridge template.
+
+Machine-local, ignored configuration:
+
+- `mcp-server/config.json` — workspace path, loopback port, timeouts, and Origins;
+- `.agents/local.config.json` — legacy local settings;
+- runtime data, Worker artifacts, Tunnel profiles, and logs.
+
+Provider keys, `CONTROL_PLANE_API_KEY`, proxy credentials, Tunnel IDs, and runtime tokens belong only in environment variables or an OS secret facility. Do not add them to JSON examples or commit them. See [Configuration and secrets](docs/configuration.md).
+
+## ChatGPT Web and Secure MCP Tunnel
+
+Local Dashboard use does not require a Tunnel. For ChatGPT Web integration, install `tunnel-client`, obtain a runtime key through the supported OpenAI flow, and use a separate terminal:
 
 ```powershell
-.\scripts\start-mcp.ps1
-```
-
-Do not expose port 8787 directly to the public internet.
-
-### Connect Secure MCP Tunnel
-
-Use placeholder-only environment values:
-
-```powershell
-$env:CONTROL_PLANE_API_KEY = 'YOUR_RUNTIME_API_KEY'
-.\scripts\start-openai-tunnel.ps1 -Initialize -TunnelId 'tunnel-example-id' -DoctorOnly
-```
-
-Then run the Tunnel wrapper in a separate terminal and connect the Tunnel app from ChatGPT Developer mode. Tunnel behavior can change; follow [the maintained Secure MCP Tunnel guide](docs/secure-mcp-tunnel.md) instead of copying old profile details.
-
-```powershell
-# Dedicated Tunnel terminal
+$env:CONTROL_PLANE_API_KEY="<tunnel-runtime-key>"
+.\scripts\start-openai-tunnel.ps1 -Initialize -TunnelId "<tunnel-id>" -DoctorOnly
 .\scripts\start-openai-tunnel.ps1
-
-# Separate readiness check
-.\scripts\start-openai-tunnel.ps1 -ReadyOnly
 ```
 
-### Validate progressively
+If command-line network access requires a proxy:
 
 ```powershell
-# Harness and provider diagnostics
-.\.agents\doctor.ps1
+$env:HTTP_PROXY="http://127.0.0.1:<proxy-port>"
+$env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
+```
 
-# No paid Worker call
-.\.agents\claude-task.ps1 plan -Task 'Return strict JSON with summary exactly ok.' -MockWorker
+Browser access to ChatGPT does not prove that `tunnel-client` or Claude Code can reach their external control planes. Keep proxy addresses and credentials out of Git. See [Secure MCP Tunnel](docs/secure-mcp-tunnel.md).
 
-# Local Bridge health and mock Worker smoke
-.\scripts\test-local.ps1 -MockWorkerSmoke
+## Validation
 
-# Run only when no Bridge is already using port 8787
+Safe local checks that do not require a paid Worker call:
+
+```powershell
+# Harness audit, policy, Resource Profile, and side-effect fixtures
+.\.agents\tests\smoke.ps1
+
+# Isolated Bridge and full mock MCP Workflow
 .\scripts\test-mcp-protocol.ps1
 
-# Small real read-only acceptance
-.\scripts\test-mcp-protocol.ps1 -RealPlan -MaxBudgetUsd 0.20
-
-# Independent approved write smoke
-.\scripts\test-mcp-protocol.ps1 -RealWrite -MaxBudgetUsd 0.20
+# Runtime and product UI tests
+node .\runtime\workflow-planner.test.mjs
+node .\runtime\workflow-runtime.test.mjs
+node .\runtime\supervisor-brain.test.mjs
+node .\runtime\runtime-retention.test.mjs
+node .\runtime\harness-runner.test.mjs
+node .\mcp-server\supervisor-dashboard-routes.test.mjs
+node .\mcp-server\supervisor-product-view.test.mjs
 ```
 
-From ChatGPT, start with `cc_ping`, then a mock plan, then a minimal real read-only task. Use `cc_run_approved_task` only after reviewing the exact write boundary and approval metadata. If a synchronous tool call ends before the Worker, retain the run ID and call `cc_get_result` later.
+Use real Worker tests only after checking provider cost and reviewing the exact project boundary.
 
-Recommended first-run order:
+A sanitized successful Planner -> approval -> Coder -> Reviewer run is recorded in [Beta dogfood](docs/beta-dogfood.md).
 
-1. Install dependencies and initialize local config.
-2. Review policy and run `scripts/doctor.ps1`.
-3. Start the Bridge in a dedicated terminal.
-4. Run the mock Harness/MCP checks.
-5. Initialize and start Secure MCP Tunnel in another terminal.
-6. Check Tunnel readiness and connect the ChatGPT app.
-7. Run `cc_ping`, mock plan, bounded real plan, and finally one explicitly approved minimal write.
+Runtime retention runs once at startup by default. It keeps up to 200 terminal Workflows, 200 terminal standalone Tasks, and 500 unlinked Decisions for 30 days, and removes their referenced attempt artifacts when the corresponding history expires; active work is preserved. Preview or apply cleanup manually with:
 
-## Safety model
+```powershell
+node .\scripts\cleanup-runtime.mjs
+node .\scripts\cleanup-runtime.mjs --apply
+```
 
-The safety model is layered:
+Before tagging a release, run `.\scripts\check-release-baseline.ps1`. It rejects a dirty Git baseline and tracked local config, runtime, backup, or log files. During development, `-SkipGitClean` checks the version and tracked-file boundary without requiring a clean worktree.
 
-- the Bridge exposes fixed Harness entrypoints instead of a generic shell;
-- policy constrains mode, tools, project root, external directories, budgets, and timeouts;
-- write mode requires approval metadata;
-- `--allowedTools` grants specific tools while `--disallowedTools` explicitly denies prohibited classes;
-- the system prompt forbids secrets, destructive Git operations, recursive deletion, and unsafe Windows paths;
-- stream events are persisted independently from the Worker's JSON report;
-- reported commands, checks, and file operations are cross-validated against successful, non-denied events;
-- mismatches fail conservatively as `audit_validation_failed`;
-- write smoke tests compare files, directories, and symbolic links before and after execution;
-- the local ledger records results and approval context.
+## Portable Harness installation
 
-Approval metadata records who or what authorized a run and why. It is a workflow and audit gate, not authenticated or cryptographic proof of human consent. Keep public defaults null and require explicit user confirmation for existing-file edits, deletion, network, dependencies, Git, broad scans, or ambiguous boundaries.
+The default installer prepares this cloned Supervisor repository. To install only the portable `.agents` Harness into another existing project:
 
-The ledger records run ID, mode, status, approval metadata, allowed high-risk switches, budget, timeout, changes, checks, risks, blocked items, artifact status, cost, and errors. It is a local review aid, not an append-only or tamper-proof security log.
+```powershell
+.\install.ps1 -TargetProject D:\path\to\another-project
+```
 
-These are guardrails, not strong isolation. Event auditing is evidence emitted by Claude Code, not an OS-kernel execution trace. If a CLI or provider omits required events, the result is treated as unverifiable rather than successful.
+Existing policy, Resource Profiles, and Workflow Definitions are preserved unless `-Force` is supplied. Historical runs are never copied.
 
-See [SECURITY.md](SECURITY.md) before enabling write access.
+## Beta limitations
 
-## Validated behavior
+- Windows is the primary validated platform.
+- The local Console fallback is rule-based; model-authored decisions are available through ChatGPT MCP and remain locally validated and auditable.
+- Stages run sequentially; there is no parallel Agent execution, branching, or automatic retry policy.
+- The Dashboard uses polling and has no notification service.
+- Approval names are local audit metadata, not authenticated identities.
+- Artifact viewing provides audit summaries, changed-file lists, and raw result links, not a full code editor or rich diff engine.
+- The local Bridge should remain bound to loopback; public ingress requires the supported Secure MCP Tunnel and careful operator configuration.
+- Provider cost reporting can differ from upstream billing, especially through third-party adapters.
 
-- Source Harness smoke: 19/19.
-- Portable-install Harness smoke: 19/19.
-- MCP initialize, discovery, ping, mock plan, approved mock run, and exact result retrieval.
-- Strict Unicode summary round-trip beyond 300 characters through Harness and `cc_get_result`.
-- `unverifiable_check_evidence`, `command_audit_mismatch`, and `file_audit_mismatch` regressions.
-- Denied and failed tool results excluded from successful evidence.
-- Windows absolute/relative path audit matching.
-- File, directory, and symbolic-link side-effect guard.
-- Real read-only and approved write paths.
-- Event-mismatch rejection during real dogfood.
-- Static task-board creation and a later supervised feature iteration.
+## Project origin
 
-Evidence and scope are documented in [validation results](docs/validation-results.md), [Alpha release notes](docs/alpha-release-notes.md), and [real-world validation](docs/real-world-validation.md).
+This project began as a personal experiment: use ChatGPT as the high-level thinking and interaction surface while a lower-cost Claude Code-compatible worker performs bounded local work. The hard part turned out not to be “more Agent intelligence”, but durable tasks, explicit approval, evidence-based auditing, resource control, and a workflow a real person can understand. Supervisor Beta is the next step toward that personal Codex-like system.
 
-## Known limitations
-
-- This is Alpha software and is not production-ready.
-- MCP execution is synchronous; ChatGPT can time out before a long Worker finishes.
-- There is no persistent asynchronous queue, lease, heartbeat, automatic reconnect orchestration, or notification outbox.
-- Runtime permission requests cannot yet pause durably and resume through ChatGPT.
-- This is not an OS-level sandbox and must not run arbitrary untrusted code.
-- Audit completeness depends on Claude Code and provider event completeness.
-- Provider budget accounting may slightly overshoot a requested limit.
-- Windows is the primary validated environment; other platforms do not have equivalent release evidence.
-- Bridge, `tunnel-client`, and any required proxy must remain running.
-- Tunnel and provider configuration remain environment-dependent.
-
-## Roadmap
-
-[Phase B](docs/v0.2-roadmap.md) proposes, but does not yet implement:
-
-- a persistent SQLite task store;
-- asynchronous submit, poll, pause, and resume;
-- leases, heartbeat, cancellation, and crash recovery;
-- a durable approval queue and event stream;
-- a notification outbox;
-- better background-process lifecycle management.
-
-## Author's note
-
-<details>
-<summary>A very personal note on why this project exists</summary>
-
-This started as a holiday vibe-coding project because I did not want my Codex allowance to go to waste. My contradictory complaint was that the allowance never felt sufficient, while buying credits or using APIs felt expensive and inconvenient. I still wanted a GPT model to act as the agent's decision-making center, so I started eyeing ChatGPT Web as the main interface.
-
-The original idea was to let a web GPT break down tasks, design Worker prompts, review requirements, and inspect quality, then use MCP to send execution work to Claude Code backed by lower-cost domestic models. My own engineering level was limited, so apart from occasional back-seat directing, I let Codex do most of the implementation.
-
-It turned out to be harder than expected. A web conversation cannot keep running indefinitely, interruptions are common, and Tunnel configuration adds friction. I still could not let go of what I thought was a brilliant idea, so I kept going until this Demo existed. The finished system does reduce some convenience and capability on both sides, which perhaps explains why this direction is uncommon.
-
-When I was discouraged, GPT comforted me by calling it "an AI Agent infrastructure experiment clearly beyond an ordinary personal project." Its talent for flattering the operator was impressive enough that I decided to publish the project anyway. This is my first serious GitHub project, so suggestions, experiments, bug reports, and a small star from interested visitors would genuinely mean a great deal to me.
-
-The full original Chinese note is available in [README.zh-CN.md](README.zh-CN.md#作者的话).
-
-</details>
-
-## Contributing and reporting issues
-
-Bug reports and focused Alpha hardening contributions are welcome. Open a GitHub issue with:
-
-- the smallest safe reproduction;
-- OS, PowerShell, Node.js, and Claude Code versions;
-- mode and policy details without credentials;
-- sanitized status, error code, and relevant audit fields;
-- whether the issue reproduces with `mockWorker`.
-
-Do not paste API keys, Tunnel IDs, personal paths, full run logs, prompts, ledgers, or user data into an issue. Report suspected vulnerabilities privately through GitHub Security Advisories as described in [SECURITY.md](SECURITY.md).
-
-Useful contributions include Windows portability, fixture coverage, audit validation, documentation, and narrowly scoped safety improvements. Phase B implementation is intentionally outside this Alpha release.
-
-## License
-
-MIT. See [LICENSE](LICENSE). Dependency licensing has been reviewed only as an engineering release check, not as legal advice.
+Contributions are welcome when they preserve the supervision and safety boundaries. Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). Licensed under the [MIT License](LICENSE).
