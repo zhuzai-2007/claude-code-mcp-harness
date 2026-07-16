@@ -45,6 +45,36 @@
         "Keep the Dashboard observational and route state changes through the existing local product API.",
         "Do not bypass Workflow approval or call the Harness directly."
       ]
+    },
+    {
+      "id": "autonomous-beta-demo",
+      "name": "Autonomous Beta Demo",
+      "path": "workspace/autonomous-beta-demo",
+      "description": "An isolated dependency-free release checklist used only for Supervisor autonomous beta validation.",
+      "language": "HTML, CSS, JavaScript",
+      "techStack": ["Static HTML", "CSS", "Browser JavaScript"],
+      "lastUsed": null,
+      "aliases": ["Autonomous Beta Demo", "autonomous beta demo", "自主验收 Demo", "自主验收演示"],
+      "defaultConstraints": [
+        "Keep the demo dependency-free and browser-only.",
+        "Limit all inspection and changes to workspace/autonomous-beta-demo.",
+        "Preserve the existing status filter, completion counts, and seeded checklist data."
+      ]
+    },
+    {
+      "id": "release-beta-todo-demo",
+      "name": "Release Beta Todo Demo",
+      "path": "workspace/release-beta-todo-demo",
+      "description": "An isolated dependency-free Todo application used only for Supervisor v1.0-beta release acceptance.",
+      "language": "HTML, CSS, JavaScript",
+      "techStack": ["Static HTML", "CSS", "Browser JavaScript"],
+      "lastUsed": null,
+      "aliases": ["Demo Todo 应用", "Demo Todo", "Todo Demo", "发布 Todo 演示"],
+      "defaultConstraints": [
+        "Keep the demo dependency-free and browser-only.",
+        "Limit all inspection and changes to workspace/release-beta-todo-demo.",
+        "Preserve the existing status filter, visible and completion counts, seeded Todo data, and responsive layout."
+      ]
     }
   ]
 }

@@ -1,4 +1,4 @@
-# Supervisor Brain v0.7
+# Supervisor Brain v1.0-beta
 
 Supervisor Brain is the responsibility layer above Workflow planning. It does not execute a Worker, create a Task directly, approve work, or weaken any Harness contract.
 

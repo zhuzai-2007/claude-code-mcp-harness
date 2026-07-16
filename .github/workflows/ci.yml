@@ -42,6 +42,10 @@ jobs:
           node .\runtime\supervisor-brain.test.mjs
           node .\runtime\runtime-retention.test.mjs
           node .\runtime\harness-runner.test.mjs
+          node .\runtime\provider-preflight.test.mjs
+          node .\runtime\failure-catalog.test.mjs
+          node .\workspace\autonomous-beta-demo\demo.test.mjs
+          node .\workspace\release-beta-todo-demo\demo.test.mjs
           node .\mcp-server\supervisor-dashboard-routes.test.mjs
           node .\mcp-server\supervisor-product-view.test.mjs
       - name: Product startup check

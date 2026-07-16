@@ -1,8 +1,8 @@
 # Worker Harness Status
 
-Product version: v0.7.0-rc.1
+Product version: v1.0.0-beta.1
 
-Status: Release Candidate for single-user, operator-controlled local dogfood; not production isolation.
+Status: v1.0-beta release candidate for single-user, operator-controlled local use; local gates pass, while the release Todo real-provider acceptance is pending provider connectivity.
 
 ## Current Capabilities
 
@@ -22,6 +22,10 @@ Status: Release Candidate for single-user, operator-controlled local dogfood; no
 - Data-driven Workflow planning and sequential Planner -> human approval -> Coder -> Reviewer orchestration.
 - Local Dashboard for Decision, lifecycle, approval, observed resource use, artifacts, evidence-derived Diff, and review results.
 - Runtime retention and release-baseline checks for terminal history and repository hygiene.
+- Explicit provider preflight using a fixed prompt, isolated empty directory, no tools, no session persistence, and no project content.
+- Failed Workflow recovery that creates new history from Planning and never reuses approval metadata.
+- User-facing failure categories, failed-stage explanations, recovery steps, and linked recovery history in the Dashboard.
+- An isolated static validation project with repeatable behavior checks and recorded real Provider/Workflow/browser acceptance.
 
 ## Important Boundaries
 
@@ -43,6 +47,8 @@ node .\runtime\task-runtime.test.mjs
 node .\runtime\supervisor-brain.test.mjs
 node .\runtime\workflow-runtime.test.mjs
 node .\mcp-server\supervisor-dashboard-routes.test.mjs
+node .\workspace\autonomous-beta-demo\demo.test.mjs
+node .\workspace\release-beta-todo-demo\demo.test.mjs
 .\scripts\test-mcp-protocol.ps1
 .\scripts\scan-doc-hygiene.ps1
 .\scripts\check-release-baseline.ps1

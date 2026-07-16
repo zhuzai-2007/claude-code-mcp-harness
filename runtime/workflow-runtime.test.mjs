@@ -186,6 +186,24 @@ try {
   assert.equal(failedWorkflow.failure.taskId, failed.tasks[0].taskId);
   assert.equal(failedWorkflow.failure.error.code, "worker_crash");
 
+  const recovered = await workflowRuntime.retryWorkflow(failed.workflowId, { requestedBy: "recovery-test", recoveryReason: "Provider connectivity was restored." });
+  assert.notEqual(recovered.workflow.workflowId, failed.workflowId);
+  assert.equal(recovered.workflow.recovery.sourceWorkflowId, failed.workflowId);
+  assert.equal(recovered.workflow.recovery.sourceFailure.failedStage, "planning");
+  assert.deepEqual(recovered.workflow.approvals, {}, "Recovery must not reuse old approval metadata");
+  assert.deepEqual(recovered.workflow.rejections, {}, "Recovery must not reuse old rejection metadata");
+  assert.equal(recovered.workflow.tasks.length, 1, "Recovery must restart from a new Planner Task");
+  assert.notEqual(recovered.workflow.tasks[0].taskId, failed.tasks[0].taskId);
+  assert.equal(recovered.sourceWorkflow.status, "failed", "Source history must remain failed");
+  assert.equal(recovered.sourceWorkflow.recoveries.at(-1).workflowId, recovered.workflow.workflowId);
+  await waitForTask(taskRuntime, recovered.workflow.tasks[0].taskId, "failed");
+  await workflowRuntime.reconcileWorkflow(recovered.workflow.workflowId);
+  const recoveryEvents = await workflowRuntime.getWorkflowEvents(recovered.workflow.workflowId);
+  assert(recoveryEvents.events.some((event) => event.type === "workflow.recovery_started"));
+  const sourceRecoveryEvents = await workflowRuntime.getWorkflowEvents(failed.workflowId);
+  assert(sourceRecoveryEvents.events.some((event) => event.type === "workflow.recovery_created"));
+  await assert.rejects(() => workflowRuntime.retryWorkflow(created.workflowId, { requestedBy: "recovery-test", recoveryReason: "Must reject active Workflow." }), /Only failed Workflows/);
+
   const coderFailure = await workflowRuntime.createWorkflow({ userRequest: "FORCE_CODER_FAILURE" });
   await waitForTask(taskRuntime, coderFailure.tasks[0].taskId);
   await workflowRuntime.reconcileWorkflow(coderFailure.workflowId);

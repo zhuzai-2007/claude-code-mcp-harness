@@ -11,6 +11,7 @@ import { FileWorkflowStore } from "../runtime/file-workflow-store.mjs";
 import { FileSupervisorStore } from "../runtime/file-supervisor-store.mjs";
 import { HarnessRunner } from "../runtime/harness-runner.mjs";
 import { ProjectContextRegistry } from "../runtime/project-context.mjs";
+import { ProviderPreflightService } from "../runtime/provider-preflight.mjs";
 import { SupervisorDecisionLayer } from "../runtime/supervisor-decision.mjs";
 import { SupervisorService } from "../runtime/supervisor-service.mjs";
 import { applyRuntimeRetention, planRuntimeRetention } from "../runtime/runtime-retention.mjs";
@@ -58,6 +59,7 @@ const supervisorDashboardRoot = resolveInsideProject("workspace", "supervisor-da
 const taskStore = new FileTaskStore(runtimeDataRoot);
 const workflowStore = new FileWorkflowStore(runtimeDataRoot);
 const supervisorStore = new FileSupervisorStore(runtimeDataRoot);
+const providerPreflight = new ProviderPreflightService({ runtimeDataRoot });
 const projectRegistry = new ProjectContextRegistry({
   projectRoot,
   registryPath: resolveInsideProject(".agents", "projects.json"),
@@ -331,7 +333,7 @@ function getResult(runId = "latest") {
 function createServer() {
   const server = new McpServer({
     name: "codex-claude-worker-harness-bridge",
-    version: "0.7.0-rc.1"
+    version: "1.0.0-beta.1"
   });
 
   server.registerTool(
@@ -811,6 +813,7 @@ function isAllowedOrigin(originHeader) {
 await taskRuntime.start();
 await workflowRuntime.start();
 await supervisorService.start();
+await providerPreflight.init();
 let retentionResult = { enabled: config.retention?.enabled !== false, removedDirectoryCount: 0 };
 if (retentionResult.enabled) {
   const retentionPlan = await planRuntimeRetention({
@@ -856,11 +859,15 @@ app.get("/health", async (req, res) => {
       projectCount: (await supervisorService.listProjects()).length,
       decisionsRoot: normalizeSlashes(supervisorStore.decisionsRoot)
     },
+    providerPreflight: {
+      available: true,
+      latest: await providerPreflight.getLatest()
+    },
     retention: retentionResult
   });
 });
 
-registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, taskRunner, dashboardRoot: supervisorDashboardRoot });
+registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, dashboardRoot: supervisorDashboardRoot });
 
 app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
   res.json({

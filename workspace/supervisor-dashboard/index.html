@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <a class="brand" href="./"><span class="brand-mark">S</span><span><strong>Supervisor</strong><small>Personal development runtime</small></span></a>
-    <div class="connection"><span id="connection-dot" class="connection-dot"></span><span><strong id="connection">Connecting</strong><small id="last-updated">Waiting for runtime</small></span><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button></div>
+    <div class="connection"><span id="connection-dot" class="connection-dot"></span><span><strong id="connection">Connecting</strong><small id="last-updated">Waiting for runtime</small></span><div id="provider-preflight" class="preflight-state"><strong id="preflight-status">Provider not checked</strong><small id="preflight-detail">No project content is sent</small></div><button id="run-preflight" class="secondary-button" type="button">Test provider</button><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button></div>
   </header>
 
   <main class="page-shell">
@@ -55,6 +55,17 @@
           <article class="panel">
             <div class="panel-heading"><div><p class="eyebrow">Progress</p><h2>Stage timeline</h2></div><span id="stage-progress"></span></div>
             <div id="stage-timeline" class="stage-timeline"></div>
+          </article>
+
+          <article id="recovery-panel" class="panel recovery-panel hidden">
+            <div class="panel-heading"><div><p class="eyebrow">Reliability</p><h2>Failure and recovery</h2></div><span id="failure-category">Failure</span></div>
+            <div id="failure-content" class="failure-content"></div>
+            <form id="recovery-form" class="recovery-form">
+              <p>A recovery creates a new Workflow from Planning. Previous history stays unchanged and no approval is reused.</p>
+              <label>Operator name<input id="recovery-operator" maxlength="100" required placeholder="Your name"></label>
+              <label>Recovery reason<textarea id="recovery-reason" maxlength="1000" required placeholder="What changed or why should this be retried?"></textarea></label>
+              <button id="retry-workflow" class="primary-button" type="submit">Create recovery workflow</button>
+            </form>
           </article>
 
           <article id="approval-panel" class="panel approval-panel hidden">

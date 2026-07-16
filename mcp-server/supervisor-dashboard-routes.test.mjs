@@ -32,8 +32,15 @@ const workflowRuntime = {
   async createWorkflow(options) { calls.push(["createWorkflow", options]); return { ...workflow, workflowId: "workflow_created_test", userRequest: options.userRequest, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 }, status: "planning", currentStage: "planning" }; },
   async approveWorkflow(workflowId, approval) { calls.push(["approveWorkflow", workflowId, approval]); return { ...workflow, workflowId, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 }, status: "running", approvals: { implementation: { ...approval, approvedAt: task.createdAt } } }; },
   async rejectWorkflow(workflowId, rejection) { calls.push(["rejectWorkflow", workflowId, rejection]); return { ...workflow, workflowId, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 }, status: "failed", approvals: {}, failure: { error: { code: "approval_rejected", message: rejection.rejectionReason } }, rejections: { implementation: { ...rejection, rejectedAt: task.createdAt } } }; },
+  async retryWorkflow(workflowId, recovery) { calls.push(["retryWorkflow", workflowId, recovery]); return { sourceWorkflow: { ...workflow, workflowId, status: "failed", orchestrated: true, failure: { failedStage: "planning", role: "planner", error: { code: "worker_crash", message: "ConnectionRefused" } }, recoveries: [{ workflowId: "workflow_recovered_test" }] }, workflow: { ...workflow, workflowId: "workflow_recovered_test", status: "planning", approvals: {}, rejections: {}, recovery: { sourceWorkflowId: workflowId }, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 } } }; },
   async getWorkflow(workflowId) { calls.push(["getWorkflow", workflowId]); return [workflow.workflowId, "workflow_created_test", "workflow_waiting_test"].includes(workflowId) ? { ...workflow, workflowId } : null; },
   async getWorkflowEvents(workflowId, options) { calls.push(["workflowEvents", workflowId, options]); return workflowId === workflow.workflowId ? { workflowId, events, lastSequence: 2, hasMore: false } : null; }
+};
+const providerPreflight = {
+  latest: null,
+  next: { status: "ok", classification: "reachable", safety: { projectContentSent: false, toolsEnabled: false, modificationsAllowed: false } },
+  async getLatest() { calls.push(["getPreflight"]); return this.latest; },
+  async run(options) { calls.push(["runPreflight", options]); this.latest = this.next; return this.latest; }
 };
 const supervisorService = {
   async submitRequest(options) {
@@ -56,7 +63,7 @@ const app = express();
 // Match the real MCP host, which has already consumed JSON request bodies
 // before the Supervisor product routes are registered.
 app.use(express.json());
-registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, taskRunner, dashboardRoot: path.resolve(directory, "..", "workspace", "supervisor-dashboard") });
+registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, dashboardRoot: path.resolve(directory, "..", "workspace", "supervisor-dashboard") });
 const server = http.createServer(app);
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 
@@ -69,6 +76,14 @@ try {
   const localHeaders = { "content-type": "application/json", origin: base };
   const projectsResponse = await fetch(`${base}/api/supervisor/projects`);
   assert.equal((await projectsResponse.json()).projects[0].id, "board");
+  assert.equal((await (await fetch(`${base}/api/supervisor/provider-preflight`)).json()).latest, null);
+  const preflightResponse = await fetch(`${base}/api/supervisor/provider-preflight`, { method: "POST", headers: localHeaders, body: JSON.stringify({ timeoutSeconds: 30 }) });
+  assert.equal(preflightResponse.status, 200);
+  assert.equal((await preflightResponse.json()).result.classification, "reachable");
+  providerPreflight.next = { status: "failed", classification: "provider_timeout", message: "The provider timed out.", safety: { projectContentSent: false, toolsEnabled: false, modificationsAllowed: false } };
+  const failedPreflightResponse = await fetch(`${base}/api/supervisor/provider-preflight`, { method: "POST", headers: localHeaders, body: JSON.stringify({ timeoutSeconds: 30 }) });
+  assert.equal(failedPreflightResponse.status, 503);
+  assert.equal((await failedPreflightResponse.json()).result.classification, "provider_timeout");
   const createdResponse = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: localHeaders, body: JSON.stringify({ userRequest: "给任务看板增加导出 JSON 功能" }) });
   assert.equal(createdResponse.status, 201);
   const createdWorkflow = (await createdResponse.json()).workflow;
@@ -82,6 +97,12 @@ try {
   const rejectResponse = await fetch(`${base}/api/supervisor/workflows/workflow_waiting_test/reject`, { method: "POST", headers: localHeaders, body: JSON.stringify({ rejectedBy: "operator", rejectionReason: "Scope is too broad." }) });
   assert.equal(rejectResponse.status, 200);
   assert.equal((await rejectResponse.json()).workflow.product.approval.status, "rejected");
+
+  const retryResponse = await fetch(`${base}/api/supervisor/workflows/workflow_dashboard_test/retry`, { method: "POST", headers: localHeaders, body: JSON.stringify({ requestedBy: "operator", recoveryReason: "Provider connectivity restored." }) });
+  assert.equal(retryResponse.status, 201);
+  const retried = await retryResponse.json();
+  assert.equal(retried.workflow.recovery.sourceWorkflowId, "workflow_dashboard_test");
+  assert.deepEqual(retried.workflow.approvals, {});
 
   const invalidCreate = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: localHeaders, body: JSON.stringify({ userRequest: "" }) });
   assert.equal(invalidCreate.status, 400);
@@ -122,15 +143,17 @@ try {
   const dashboard = await fetch(`${base}/supervisor/`);
   assert.equal(dashboard.status, 200);
   const dashboardHtml = await dashboard.text();
-  for (const marker of ["new-task-form", "project-confirmation", "decision-panel", "decision-content", "approval-panel", "approval-title", "Approve and run", "Reject", "Execution policy", "Technical details"]) assert.match(dashboardHtml, new RegExp(marker));
+  for (const marker of ["provider-preflight", "run-preflight", "new-task-form", "project-confirmation", "decision-panel", "decision-content", "approval-panel", "approval-title", "recovery-panel", "retry-workflow", "Approve and run", "Reject", "Execution policy", "Technical details"]) assert.match(dashboardHtml, new RegExp(marker));
   const dashboardScript = await fetch(`${base}/supervisor/app.js`);
   const dashboardSource = await dashboardScript.text();
-  for (const marker of ["workflowType", "supervisorDecision", "technicalSummary", "estimatedResources", "recommendedActions", "project_confirmation_required", "Observed Diff", "Modified files", "Review result", "Risks and errors", "totalCostUsd", "totalUsage", "/approve", "/reject"]) assert.match(dashboardSource, new RegExp(marker));
+  for (const marker of ["provider-preflight", "failure.category", "recoverySteps", "workflowType", "supervisorDecision", "technicalSummary", "estimatedResources", "recommendedActions", "project_confirmation_required", "Observed Diff", "Modified files", "Review result", "Risks and errors", "totalCostUsd", "totalUsage", "/approve", "/reject", "/retry"]) assert.match(dashboardSource, new RegExp(marker));
+  assert.match(dashboardSource, /sentenceLabel\(result\.classification\)/, "Provider failure heading should use a sentence-cased label");
+  assert.doesNotMatch(dashboardSource, /Provider: \$\{statusLabel/, "Provider failure heading should not repeat the Provider label");
   assert.equal((await fetch(`${base}/supervisor/refresh-policy.mjs`)).status, 200);
   assert.equal(refreshDelay(true), 1000, "Running work must refresh at least once per second");
   assert.equal(refreshDelay(false), 4000, "Idle refresh should back off to 3-5 seconds");
-  assert(calls.every(([operation]) => ["listTasks", "getTask", "taskEvents", "listWorkflows", "createWorkflow", "approveWorkflow", "rejectWorkflow", "getWorkflow", "workflowEvents", "submitRequest", "listProjects", "getDecision"].includes(operation)));
-  console.log(JSON.stringify({ ok: true, routes: ["workflow-create", "workflow-approve", "workflow-reject", "workflow-list", "workflow-detail", "workflow-events", "task-list", "task-detail", "artifact", "static"], refresh: { activeMs: refreshDelay(true), idleMs: refreshDelay(false) } }, null, 2));
+  assert(calls.every(([operation]) => ["listTasks", "getTask", "taskEvents", "listWorkflows", "createWorkflow", "approveWorkflow", "rejectWorkflow", "retryWorkflow", "getWorkflow", "workflowEvents", "submitRequest", "listProjects", "getDecision", "getPreflight", "runPreflight"].includes(operation)));
+  console.log(JSON.stringify({ ok: true, routes: ["provider-preflight", "workflow-create", "workflow-approve", "workflow-reject", "workflow-retry", "workflow-list", "workflow-detail", "workflow-events", "task-list", "task-detail", "artifact", "static"], refresh: { activeMs: refreshDelay(true), idleMs: refreshDelay(false) } }, null, 2));
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }

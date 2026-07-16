@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Release Todo</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Supervisor release workspace</p>
+        <h1>Release Todo</h1>
+        <p class="intro">A small, isolated checklist for validating a complete supervised change.</p>
+      </header>
+
+      <section class="summary" aria-label="Todo summary">
+        <div><strong id="visible-count">0</strong><span>visible</span></div>
+        <div><strong id="complete-count">0</strong><span>complete</span></div>
+      </section>
+
+      <section class="toolbar" aria-label="Todo filters">
+        <label for="status-filter">Status</label>
+        <select id="status-filter">
+          <option value="all">All</option>
+          <option value="open">Open</option>
+          <option value="complete">Complete</option>
+        </select>
+      </section>
+
+      <section>
+        <ul id="todo-list" class="todo-list" aria-live="polite"></ul>
+        <p id="empty-state" class="empty-state" hidden>No todos match this view.</p>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

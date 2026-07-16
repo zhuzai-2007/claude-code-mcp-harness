@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch] $Json
+    [switch] $Json,
+    [switch] $ProviderPreflight,
+    [ValidateRange(10, 300)][int] $ProviderPreflightTimeoutSeconds = 60
 )
 
 Set-StrictMode -Version Latest
@@ -122,6 +124,7 @@ if (Test-Path -LiteralPath $projectRegistryPath) {
 }
 
 $bridgeUrl = $null
+$health = $null
 if ($config) {
     $hostName = if ($config.host) { [string]$config.host } else { "127.0.0.1" }
     $port = if ($config.port) { [int]$config.port } else { 8787 }
@@ -148,7 +151,32 @@ if (-not $tunnel) {
 
 $proxyConfigured = -not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY) -or -not [string]::IsNullOrWhiteSpace($env:HTTP_PROXY)
 $checks.Add((New-Check "Network proxy" $(if ($proxyConfigured) { "ok" } else { "warn" }) $(if ($proxyConfigured) { "Proxy environment is configured; values are hidden." } else { "No HTTP_PROXY/HTTPS_PROXY set." }) "Set proxy environment variables only when command-line network access requires them." $false))
-$checks.Add((New-Check "External Worker connectivity" "warn" "Doctor does not send project content or make a paid model call." "Run a reviewed read-only dogfood after confirming provider and proxy access." $false))
+$latestPreflight = if ($health -and $health.providerPreflight.latest) {
+    $health.providerPreflight.latest
+} else {
+    $latestPreflightPath = Join-Path $repoRoot "runtime-data\provider-preflight\latest.json"
+    if (Test-Path -LiteralPath $latestPreflightPath) {
+        try { Get-Content -LiteralPath $latestPreflightPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+        catch { $null }
+    } else { $null }
+}
+if ($ProviderPreflight) {
+    try {
+        $preflightScript = Join-Path $repoRoot "scripts\provider-preflight.mjs"
+        $preflightText = (& node $preflightScript --json --timeout $ProviderPreflightTimeoutSeconds 2>&1 | Out-String).Trim()
+        $preflightExit = $LASTEXITCODE
+        $preflight = $preflightText | ConvertFrom-Json
+        $detail = "$($preflight.classification): $($preflight.message)"
+        $advice = if (@($preflight.recoverySteps).Count) { @($preflight.recoverySteps) -join " " } else { "Provider is ready for a reviewed Workflow." }
+        $checks.Add((New-Check "Provider preflight" $(if ($preflight.status -eq "ok" -and $preflightExit -eq 0) { "ok" } else { "warn" }) $detail $advice $false))
+    } catch {
+        $checks.Add((New-Check "Provider preflight" "warn" "Preflight could not produce a structured result." "Run node .\scripts\provider-preflight.mjs and inspect the local environment. $($_.Exception.Message)" $false))
+    }
+} elseif ($latestPreflight) {
+    $checks.Add((New-Check "Provider preflight" $(if ($latestPreflight.status -eq "ok") { "ok" } else { "warn" }) "Latest: $($latestPreflight.classification) at $($latestPreflight.checkedAt)." "Use .\scripts\doctor.ps1 -ProviderPreflight to run a fresh fixed probe." $false))
+} else {
+    $checks.Add((New-Check "Provider preflight" "warn" "Not run. Default doctor performs no external model call." "Run .\scripts\doctor.ps1 -ProviderPreflight before real dogfood. The probe sends no project content and exposes no tools." $false))
+}
 
 $hasErrors = @($checks | Where-Object { $_.status -eq "error" }).Count -gt 0
 $hasWarnings = @($checks | Where-Object { $_.status -eq "warn" }).Count -gt 0
@@ -164,7 +192,7 @@ if ($Json) {
     $result | ConvertTo-Json -Depth 8
 } else {
     Write-Host ""
-    Write-Host "Supervisor v0.7 RC doctor" -ForegroundColor Cyan
+    Write-Host "Supervisor v1.0 Beta doctor" -ForegroundColor Cyan
     Write-Host "Repository: $repoRoot"
     Write-Host ""
     foreach ($check in $checks) {

@@ -16,6 +16,10 @@ workspace/*
 !workspace/.gitkeep
 !workspace/supervisor-dashboard/
 !workspace/supervisor-dashboard/**
+!workspace/autonomous-beta-demo/
+!workspace/autonomous-beta-demo/**
+!workspace/release-beta-todo-demo/
+!workspace/release-beta-todo-demo/**
 docs/natural-language-smoke-results.md
 .env*
 .claude/

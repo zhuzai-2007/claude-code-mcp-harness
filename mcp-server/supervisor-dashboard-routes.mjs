@@ -38,7 +38,7 @@ function isLocalConsoleOrigin(req) {
   } catch { return false; }
 }
 
-export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, taskRunner, dashboardRoot }) {
+export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, dashboardRoot }) {
   const inspectTask = async (task) => {
     const attempts = (task.attempts || []).map((attempt) => {
       const inspection = taskRunner?.inspectAttempt?.(attempt.attemptId) || { audit: null, recentToolCalls: [], observedChanges: [], artifactFiles: [] };
@@ -83,6 +83,19 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
   app.get("/api/supervisor/projects", route(async (_req, res) => {
     noStore(res);
     res.json({ status: "success", projects: await supervisorService.listProjects() });
+  }));
+
+  app.get("/api/supervisor/provider-preflight", route(async (_req, res) => {
+    noStore(res);
+    res.json({ status: "success", latest: await providerPreflight.getLatest() });
+  }));
+
+  app.post("/api/supervisor/provider-preflight", route(async (req, res) => {
+    noStore(res);
+    const timeoutSeconds = boundedInteger(req.body?.timeoutSeconds, 60, 300);
+    if (timeoutSeconds === null || timeoutSeconds < 10) return res.status(400).json({ status: "invalid_input", error: "timeoutSeconds must be between 10 and 300." });
+    const result = await providerPreflight.run({ timeoutSeconds });
+    res.status(result.status === "ok" ? 200 : 503).json({ status: result.status === "ok" ? "success" : "preflight_failed", result });
   }));
 
   app.get("/api/supervisor/decisions/:decisionId", route(async (req, res) => {
@@ -156,6 +169,24 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     } catch (error) {
       const missing = await workflowRuntime.getWorkflow(workflowId) == null;
       res.status(missing ? 404 : 409).json({ status: missing ? "workflow_not_found" : "rejection_conflict", error: error.message });
+    }
+  }));
+
+  app.post("/api/supervisor/workflows/:workflowId/retry", route(async (req, res) => {
+    noStore(res);
+    const { workflowId } = req.params;
+    if (!workflowIdPattern.test(workflowId)) return res.status(400).json({ status: "invalid_input", error: "Invalid workflow id." });
+    let requestedBy, recoveryReason;
+    try {
+      requestedBy = textField(req.body?.requestedBy, { name: "requestedBy", max: 100 });
+      recoveryReason = textField(req.body?.recoveryReason, { name: "recoveryReason", max: 1000 });
+    } catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    try {
+      const recovered = await workflowRuntime.retryWorkflow(workflowId, { requestedBy, recoveryReason });
+      res.status(201).json({ status: "success", sourceWorkflow: await inspectWorkflow(recovered.sourceWorkflow), workflow: await inspectWorkflow(recovered.workflow) });
+    } catch (error) {
+      const missing = await workflowRuntime.getWorkflow(workflowId) == null;
+      res.status(missing ? 404 : 409).json({ status: missing ? "workflow_not_found" : "recovery_conflict", error: error.message });
     }
   }));
 

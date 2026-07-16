@@ -1,4 +1,5 @@
 import { resolveResourceProfile } from "../runtime/resource-profiles.mjs";
+import { classifyWorkflowFailure } from "../runtime/failure-catalog.mjs";
 
 const ACTIVE_STATUSES = new Set(["created", "planning", "planned", "waiting_approval", "running", "reviewing", "queued"]);
 
@@ -81,6 +82,7 @@ export function buildSupervisorProductView(workflow, tasks = []) {
   const contextualFiles = unique(plannerAudit?.files_read);
   const changeDetails = observedChangeDetails(coderTask);
   const estimatedCost = implementationStage ? resourceEstimate(implementationStage.resourceProfile, plannedChanges.length) : null;
+  const failure = classifyWorkflowFailure(workflow);
 
   return {
     status: workflow.status,
@@ -93,6 +95,12 @@ export function buildSupervisorProductView(workflow, tasks = []) {
     changeDetails,
     risks,
     errors,
+    failure,
+    recovery: {
+      available: workflow.status === "failed" && workflow.orchestrated === true && failure?.retryable === true,
+      sourceWorkflowId: workflow.recovery?.sourceWorkflowId || null,
+      recoveries: workflow.recoveries || []
+    },
     planner: plannerAudit ? { summary: plannerAudit.summary || null, proposedChanges: plannedChanges, filesRead: contextualFiles, risks: unique(plannerAudit.risks), blockedOn: unique(plannerAudit.blocked_on) } : null,
     review: reviewerAudit ? { summary: reviewerAudit.summary || null, checks: unique(reviewerAudit.tests_or_checks), risks: unique(reviewerAudit.risks), blockedOn: unique(reviewerAudit.blocked_on) } : null,
     supervisorDecision: decision ? {

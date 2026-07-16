@@ -42,8 +42,16 @@ assert.equal(product.changeDetails[0].summary, "1 observed edit; +3 / -1 lines")
 assert.equal(product.approval.estimatedCost.upperBoundUsd, 4);
 assert(product.executionPolicy.blocked.some((item) => item.includes("without explicit approval")));
 
-const rejected = buildSupervisorProductView({ ...workflow, status: "failed", failure: { error: { code: "approval_rejected", message: "Too broad" } }, rejections: { implementation: { rejectedBy: "operator", rejectionReason: "Too broad", rejectedAt: "2026-07-15T00:00:00Z" } } }, tasks);
+const rejected = buildSupervisorProductView({ ...workflow, orchestrated: true, status: "failed", failure: { failedStage: "implementation", role: "coder", error: { code: "approval_rejected", message: "Too broad" } }, rejections: { implementation: { rejectedBy: "operator", rejectionReason: "Too broad", rejectedAt: "2026-07-15T00:00:00Z" } } }, tasks);
 assert.equal(rejected.approval.status, "rejected");
 assert.match(rejected.nextAction, /Revise/);
+assert.equal(rejected.failure.category, "human_decision");
+assert.equal(rejected.recovery.available, true);
+
+const providerFailure = buildSupervisorProductView({ ...workflow, orchestrated: true, status: "failed", currentStage: "planning", failure: { failedStage: "planning", role: "planner", taskId: "task_failed", error: { code: "worker_crash", message: "API Error: Unable to connect to API (ConnectionRefused)" } }, recoveries: [{ workflowId: "workflow_recovered" }] }, []);
+assert.equal(providerFailure.failure.category, "provider_connectivity");
+assert.equal(providerFailure.failure.stageLabel, "Planning");
+assert(providerFailure.failure.recoverySteps.some((step) => step.includes("Preflight")));
+assert.equal(providerFailure.recovery.recoveries[0].workflowId, "workflow_recovered");
 
 console.log(JSON.stringify({ ok: true, approval: product.approval, policy: product.executionPolicy }, null, 2));

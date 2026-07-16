@@ -1,9 +1,9 @@
 {
   "name": "codex-claude-worker-mcp-bridge",
-  "version": "0.7.0-rc.1",
+  "version": "1.0.0-beta.1",
   "private": true,
   "type": "module",
-  "description": "GPT-native local software engineering Supervisor release candidate with bounded Claude Code workflows.",
+  "description": "Release-prepared GPT-native local software engineering Supervisor Beta.",
   "main": "server.mjs",
   "scripts": {
     "start": "node ./server.mjs",
@@ -17,6 +17,10 @@
     "test:workflow-planner": "node ../runtime/workflow-planner.test.mjs",
     "test:supervisor-brain": "node ../runtime/supervisor-brain.test.mjs",
     "test:retention": "node ../runtime/runtime-retention.test.mjs",
+    "test:preflight": "node ../runtime/provider-preflight.test.mjs",
+    "test:failures": "node ../runtime/failure-catalog.test.mjs",
+    "test:demo": "node ../workspace/autonomous-beta-demo/demo.test.mjs",
+    "test:release-demo": "node ../workspace/release-beta-todo-demo/demo.test.mjs",
     "cleanup:runtime": "node ../scripts/cleanup-runtime.mjs"
   },
   "dependencies": {

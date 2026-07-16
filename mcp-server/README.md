@@ -73,7 +73,7 @@ Durable asynchronous Task Runtime:
 - `cc_approve_task`: approves the exact revision, prompt hash, and capability boundary of a waiting run Task.
 - `cc_cancel_task`: cancels pending work or terminates the active Harness process tree.
 
-GPT-native Supervisor Brain, Workflow Planning, and Orchestrator v0.7:
+GPT-native Supervisor Brain, Workflow Planning, and Orchestrator v1.0-beta:
 
 - `cc_list_projects`: returns the registered project contexts before ChatGPT makes or confirms a Decision.
 - `cc_create_workflow`: persists a Supervisor Decision, resolves a registered project, and only then hands the request to Workflow planning. Optional `supervisorDecision` lets ChatGPT provide intent, goal, concise reasoning, Workflow type, confidence, and next action. Existing callers remain valid; ambiguous projects return `project_confirmation_required` and can be confirmed by calling the same tool with `decisionId` plus `projectId`.
@@ -83,6 +83,8 @@ GPT-native Supervisor Brain, Workflow Planning, and Orchestrator v0.7:
 - `cc_get_workflow_events`: merges Workflow association events with existing child Task events.
 
 Supervisor Decisions are stored under `runtime-data/supervisor-decisions/`; registered project context comes from `.agents/projects.json`. Workflow data remains separate under `runtime-data/workflows/`. The deterministic fallback selects among `software_change`, `analysis_only`, and `documentation_change` definitions loaded from `.agents/workflow-definitions.json`. The Orchestrator cannot synthesize approval metadata or start an approval-gated run stage before `cc_approve_workflow`.
+
+The local product API also exposes an isolated Provider Preflight and failed-Workflow recovery for the Dashboard. These are not new MCP tools, Agent roles, or Workflow definitions. Preflight runs a fixed prompt in an empty temporary directory with tools disabled; recovery creates a new Workflow from Planning and never copies approval metadata.
 
 Legacy synchronous compatibility tools:
 

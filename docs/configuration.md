@@ -77,4 +77,14 @@ Run the human-readable Doctor before startup:
 .\scripts\doctor.ps1
 ```
 
+Default Doctor does not make an external model request. To verify the configured Claude CLI provider explicitly:
+
+```powershell
+.\scripts\doctor.ps1 -ProviderPreflight
+```
+
+This probe uses a fixed non-project marker, an isolated empty temporary directory, `--tools ""`, and disabled session persistence. It does not read or send project content and cannot modify project files. It may incur the provider's minimum request cost. The latest Dashboard-triggered result is stored in ignored `runtime-data/provider-preflight/latest.json`.
+
+Failed Workflow recovery creates a separate Workflow directory and links it to the source history. It copies the original request, selected project, Supervisor Decision, Workflow type, and mock setting only. Task IDs, Attempt IDs, approval/rejection metadata, and stage results are never reused.
+
 For automation, use `.\scripts\doctor.ps1 -Json`. Warnings such as “Bridge not running” or “Tunnel not configured” are expected before those optional components start; `[FAIL]` items include a concrete remediation and block startup readiness.

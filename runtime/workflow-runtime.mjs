@@ -76,7 +76,7 @@ export class WorkflowRuntime {
 
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
-  async createWorkflow({ userRequest, definitionId = null, supervisorDecision = null, mockWorker = false }) {
+  async createWorkflow({ userRequest, definitionId = null, supervisorDecision = null, mockWorker = false, recovery = null }) {
     const request = String(userRequest || "").trim();
     if (!request) throw new Error("userRequest is required");
     if (supervisorDecision && supervisorDecision.nextAction !== "create_workflow") throw new Error("Supervisor Decision is not ready to create a Workflow.");
@@ -97,7 +97,7 @@ export class WorkflowRuntime {
     if (!definition) throw new Error(`Unknown Workflow definition: ${selectedId || "<empty>"}`);
     const createdAt = nowIso();
     const workflow = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       workflowId: `workflow_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
       userRequest: request,
       orchestrated: true,
@@ -129,16 +129,54 @@ export class WorkflowRuntime {
       approvals: {},
       rejections: {},
       settings: { mockWorker: Boolean(mockWorker) },
+      recovery: recovery ? JSON.parse(JSON.stringify(recovery)) : null,
+      recoveries: [],
       failure: null,
       lastEventSequence: 0
     };
     await this.store.createWorkflow(workflow);
     await this._mutate(workflow.workflowId, (current, emit) => {
+      if (current.recovery) emit("workflow.recovery_started", current.recovery);
       if (current.supervisorDecision) emit("workflow.supervisor_decision_recorded", { decisionId: current.supervisorDecision.decisionId, schemaVersion: current.supervisorDecision.schemaVersion, intent: current.supervisorDecision.intent, workflowType: current.supervisorDecision.workflowType, project: current.supervisorDecision.project, risks: current.supervisorDecision.risks, estimatedResources: current.supervisorDecision.estimated_resources, confidence: current.supervisorDecision.confidence });
       emit("workflow.planning_completed", { workflowType: current.workflowPlan.workflowType, reason: current.workflowPlan.reason, selection: current.workflowPlan.selection, stages: current.workflowPlan.stages });
       emit("workflow.created", { userRequest: current.userRequest, definitionId: current.definitionId });
     });
     return this.reconcileWorkflow(workflow.workflowId);
+  }
+
+  async retryWorkflow(workflowId, { requestedBy, recoveryReason }) {
+    const operator = String(requestedBy || "").trim();
+    const reason = String(recoveryReason || "").trim();
+    if (!operator || !reason) throw new Error("requestedBy and recoveryReason are required");
+    const source = await this.store.readWorkflow(workflowId);
+    if (!source) throw new Error(`Workflow not found: ${workflowId}`);
+    if (!source.orchestrated) throw new Error("Legacy Workflow does not support recovery.");
+    if (source.status !== "failed") throw new Error(`Only failed Workflows can be recovered: ${source.status}`);
+    const requestedAt = nowIso();
+    const recovery = {
+      sourceWorkflowId: source.workflowId,
+      requestedBy: operator,
+      recoveryReason: reason,
+      requestedAt,
+      sourceFailure: source.failure ? {
+        failedStage: source.failure.failedStage || null,
+        role: source.failure.role || null,
+        code: source.failure.error?.code || "stage_failed"
+      } : null
+    };
+    const created = await this.createWorkflow({
+      userRequest: source.userRequest,
+      definitionId: source.definitionId,
+      supervisorDecision: source.supervisorDecision || null,
+      mockWorker: source.settings?.mockWorker === true,
+      recovery
+    });
+    await this._mutate(source.workflowId, (current, emit) => {
+      current.recoveries ||= [];
+      current.recoveries.push({ workflowId: created.workflowId, requestedBy: operator, recoveryReason: reason, requestedAt });
+      emit("workflow.recovery_created", { recoveredWorkflowId: created.workflowId, requestedBy: operator, recoveryReason: reason });
+    });
+    return { sourceWorkflow: await this.getWorkflow(source.workflowId), workflow: await this.getWorkflow(created.workflowId) };
   }
 
   async approveWorkflow(workflowId, { approvedBy, approvalReason }) {

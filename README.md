@@ -1,4 +1,4 @@
-# Supervisor v0.7 Release Candidate
+# Supervisor v1.0 Beta
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -31,10 +31,14 @@ The project does not build a new model or a general Agent platform. It reuses AI
 - A persistent Supervisor Decision that records intent, goal, project, reasoning, Workflow type, confidence, and next action before a Workflow exists.
 - A registered Project Context layer that selects a unique target or pauses for explicit project confirmation.
 - An Approval Center with decision context, bounded cost estimate, observed file scope, and tool-evidence diffs.
+- An isolated Provider Preflight that sends a fixed non-project probe with no tools or session persistence.
+- Safe recovery for failed Workflows: new history, a new Planner, and a new approval boundary.
+- Plain-language failed-stage classification and recovery guidance in the Dashboard.
+- A repeatable isolated Demo and recorded real-provider, full-Workflow, Dashboard, desktop, and mobile acceptance.
 
 ## Supervisor Brain
 
-ChatGPT can attach a structured `supervisorDecision` to `cc_create_workflow`. The v0.7 contract records intent, technical goal, registered project, concise reasoning, risks, expected resources, recommended Workflow/actions, confidence, whether a Worker is needed, and the next action. The local Console uses the same Decision Layer with deterministic, explainable fallback rules when no model is present. Every Decision is persisted under `runtime-data/supervisor-decisions/` before it can reach the Workflow Runtime.
+ChatGPT can attach a structured `supervisorDecision` to `cc_create_workflow`. v1.0-beta preserves the existing Decision contract: intent, technical goal, registered project, concise reasoning, risks, expected resources, recommended Workflow/actions, confidence, whether a Worker is needed, and the next action. The local Console uses the same Decision Layer with deterministic, explainable fallback rules when no model is present. Every Decision is persisted under `runtime-data/supervisor-decisions/` before it can reach the Workflow Runtime.
 
 Projects are registered in `.agents/projects.json` with a stable ID, relative path, description, language, aliases, and runtime-derived `lastUsed`. A unique request match is selected automatically. If several projects remain plausible, Supervisor returns `project_confirmation_required`; no Workflow or Worker starts until the user confirms one of the registered candidates.
 
@@ -62,6 +66,12 @@ Clone the repository, then run:
 .\start.ps1
 ```
 
+Those three commands are sufficient to start the local Dashboard. Before the first real Worker task, optionally verify external model connectivity with the isolated, potentially billable probe:
+
+```powershell
+.\scripts\doctor.ps1 -ProviderPreflight
+```
+
 Open the Dashboard URL printed by `start.ps1`, normally:
 
 ```text
@@ -77,6 +87,24 @@ Enter a request such as:
 Supervisor starts with a persisted Decision and read-only planning. The console shows Decision → Planning → Approval → Execution → Review, including technical summary, project stack/default constraints, proposed scope, combined risks, expected resources, Resource Profile hard caps, and estimated impact. Review that information, enter your name and decision reason, then explicitly Approve or Reject. Approval metadata is audit context, not identity verification.
 
 Before first use, review `.agents/projects.json`. Keep paths relative to `projectRoot`; register only directories the Supervisor should be allowed to target. When the Console asks for project confirmation, choosing a project still starts only the read-only Planner.
+
+`doctor.ps1` performs no external model call by default. The explicit `-ProviderPreflight` switch sends only a fixed connectivity marker from an isolated empty temporary directory, with tools disabled and session persistence off. It never sends project content or creates a Workflow. The probe can incur the provider's minimum request cost.
+
+If a Workflow fails, the Dashboard identifies the failed stage and classifies common provider, timeout, resource, environment, and audit-contract errors. **Create recovery workflow** creates a distinct Workflow from Planning and links both histories. Previous approval or rejection metadata is never copied; every new write stage requires fresh review and approval.
+
+## Autonomous Beta validation
+
+v0.9 was accepted against the isolated `workspace/autonomous-beta-demo` project with the real configured provider. A plain-language search request completed Decision → Planner → explicit bounded test approval → Coder → Reviewer. Independent Microsoft Edge checks then exercised keyword search, combined status filtering, counts, and the empty state. A measured 360px overflow was fixed through a second fully audited Workflow and rechecked at 360px and 1280px.
+
+The validation driver supplied named approval metadata after inspecting each Planner result; the product did not auto-approve and no approval boundary was removed. See [v0.9 autonomous validation](docs/v0.9-autonomous-validation.md) and run the dependency-free contract test with:
+
+```powershell
+node .\workspace\autonomous-beta-demo\demo.test.mjs
+```
+
+## v1.0-beta release preparation
+
+v1.0-beta is a release-convergence milestone, not a Runtime redesign. It keeps the v0.9 Decision, Workflow, Task, approval, resource, and audit boundaries intact while tightening first-run guidance, version checks, release artifact visibility, and repeatable Todo acceptance. See [v1.0-beta release audit](docs/v1.0-beta-release-audit.md).
 
 ## Architecture
 
@@ -208,6 +236,10 @@ node .\runtime\workflow-runtime.test.mjs
 node .\runtime\supervisor-brain.test.mjs
 node .\runtime\runtime-retention.test.mjs
 node .\runtime\harness-runner.test.mjs
+node .\runtime\provider-preflight.test.mjs
+node .\runtime\failure-catalog.test.mjs
+node .\workspace\autonomous-beta-demo\demo.test.mjs
+node .\workspace\release-beta-todo-demo\demo.test.mjs
 node .\mcp-server\supervisor-dashboard-routes.test.mjs
 node .\mcp-server\supervisor-product-view.test.mjs
 ```

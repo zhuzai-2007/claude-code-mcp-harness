@@ -24,10 +24,16 @@ $effectiveTarget = if ([string]::IsNullOrWhiteSpace($TargetProject)) { $sourcePr
 $targetRoot = Resolve-FullPathExistingOrParent $effectiveTarget
 
 if ($targetRoot.TrimEnd('\') -eq $sourceProject.TrimEnd('\')) {
-    Write-Host "Setting up Supervisor v0.7 RC in: $sourceProject" -ForegroundColor Cyan
+    Write-Host "Setting up Supervisor v1.0 Beta in: $sourceProject" -ForegroundColor Cyan
     & (Join-Path $sourceProject 'scripts\init-config.ps1') -ProjectRoot $sourceProject
     if (-not $SkipDependencies) {
+        if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "node was not found. Install Node.js 20 or newer, reopen PowerShell, and run .\install.ps1 again." }
         if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm was not found. Install Node.js 20 or newer, reopen PowerShell, and run .\install.ps1 again." }
+        $nodeVersionText = (& node --version).Trim().TrimStart("v")
+        $nodeMajor = 0
+        if (-not [int]::TryParse(($nodeVersionText -split '\.')[0], [ref]$nodeMajor) -or $nodeMajor -lt 20) {
+            throw "Node.js 20 or newer is required; found v$nodeVersionText. Upgrade Node.js, reopen PowerShell, and run .\install.ps1 again."
+        }
         Write-Host "Installing locked MCP dependencies..."
         & npm ci --prefix (Join-Path $sourceProject 'mcp-server')
         if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE. Check command-line network/proxy settings and retry." }
@@ -36,6 +42,7 @@ if ($targetRoot.TrimEnd('\') -eq $sourceProject.TrimEnd('\')) {
     Write-Host "Setup complete." -ForegroundColor Green
     Write-Host "Next:"
     Write-Host "  1. .\scripts\doctor.ps1"
+    Write-Host "     Optional real-provider gate: .\scripts\doctor.ps1 -ProviderPreflight"
     Write-Host "  2. .\start.ps1"
     Write-Host "  3. Open the Dashboard URL printed by start.ps1"
     exit 0

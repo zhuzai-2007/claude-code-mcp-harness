@@ -1,4 +1,4 @@
-# Supervisor v0.7 Release Candidate
+# Supervisor v1.0 Beta
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -31,10 +31,14 @@ Supervisor 是一个本地运行、由人控制的开发任务系统，用来把
 - 在 Workflow 创建前持久化 Supervisor Decision，记录意图、目标、项目、判断依据、流程类型、置信度和下一步动作；
 - 通过 `.agents/projects.json` 注册项目：唯一候选自动选择，多候选时先要求用户确认；
 - 在审批中心展示决策上下文、资源上限、规则成本估算，以及来自真实 Write/Edit 工具事件的 Diff。
+- 使用固定非项目 prompt、空临时目录、禁用工具和会话持久化来执行 Provider Preflight；
+- failed Workflow 可以创建全新恢复 Workflow，重新规划且不复用旧审批；
+- Dashboard 会显示失败阶段、用户可理解的错误分类和恢复建议。
+- 提供可重复的隔离 Demo，并记录真实 Provider、完整 Workflow、Dashboard、桌面端和移动端验收结果。
 
 ## Supervisor Brain
 
-ChatGPT 可以在 `cc_create_workflow` 调用中附带结构化 `supervisorDecision`。v0.7 契约记录用户意图、技术目标、注册项目、简洁判断依据、风险、预计资源、推荐 Workflow/动作、置信度、是否需要 Worker 和下一步动作。本地 Dashboard 没有模型进程，因此使用确定性、可解释的规则作为回退；两条入口都经过同一套项目注册、Decision 持久化和 Workflow 校验。
+ChatGPT 可以在 `cc_create_workflow` 调用中附带结构化 `supervisorDecision`。v1.0-beta 保持既有 Decision 契约：记录用户意图、技术目标、注册项目、简洁判断依据、风险、预计资源、推荐 Workflow/动作、置信度、是否需要 Worker 和下一步动作。本地 Dashboard 没有模型进程，因此使用确定性、可解释的规则作为回退；两条入口都经过同一套项目注册、Decision 持久化和 Workflow 校验。
 
 Decision 会先写入 `runtime-data/supervisor-decisions/`。只有目标项目已经唯一确定，且 `nextAction=create_workflow` 时，才会交给 Workflow Runtime。项目有歧义时返回 `project_confirmation_required`，不会创建 Workflow，更不会启动 Worker。
 
@@ -60,6 +64,12 @@ Clone 仓库后执行：
 .\start.ps1
 ```
 
+以上三条命令即可启动本地 Dashboard。第一次执行真实 Worker 任务前，可按需运行隔离的外部模型连通性检查；该探针可能产生最低单次费用：
+
+```powershell
+.\scripts\doctor.ps1 -ProviderPreflight
+```
+
 打开 `start.ps1` 打印的控制台地址，默认是：
 
 ```text
@@ -75,6 +85,24 @@ http://127.0.0.1:8787/supervisor/
 Supervisor 会先持久化 Decision，再进行只读规划。控制台按 Decision → Planning → Approval → Execution → Review 展示完整生命周期，并显示技术摘要、项目技术栈和默认约束、建议范围、综合风险、预计资源、Resource Profile 硬上限和预计影响。检查这些信息后，填写审批人和决策理由，再明确选择 Approve 或 Reject。审批信息属于本地审计元数据，不等同于身份认证。
 
 首次使用前请检查 `.agents/projects.json`。项目路径必须相对于 `projectRoot`；当控制台要求确认项目时，确认后仍然只会先启动只读 Planner。
+
+默认 `doctor.ps1` 不会调用外部模型。显式添加 `-ProviderPreflight` 后，只会从隔离的空临时目录发送固定连通性标记，工具和会话持久化均关闭；不会发送项目内容，也不会创建 Workflow。该探针可能产生 Provider 的最低单次请求费用。
+
+Workflow 失败后，Dashboard 会展示失败阶段，并区分 provider 连接、认证、timeout、资源、环境和审计契约问题。**Create recovery workflow** 会创建新的 Workflow、重新执行 Planner，并链接新旧历史；旧 approval/rejection 不会复制，新的可写阶段仍需重新审批。
+
+## 自主 Beta 验收
+
+v0.9 使用隔离项目 `workspace/autonomous-beta-demo` 和真实 Provider 完成验收。只输入自然语言搜索需求后，系统依次完成 Decision → Planner → 显式受限测试审批 → Coder → Reviewer；随后使用 Microsoft Edge 独立验证关键词搜索、状态组合筛选、计数和空状态。验收发现 360px 小屏工具栏真实溢出，又通过第二个完整审计 Workflow 做最小修复，并在 360px 和 1280px 下重新验证。
+
+验收驱动只在检查 Planner 结果后写入具名审批元数据；产品没有自动批准，也没有移除审批边界。详细证据见 [v0.9 自主验收记录](docs/v0.9-autonomous-validation.md)。可重复的无依赖契约测试：
+
+```powershell
+node .\workspace\autonomous-beta-demo\demo.test.mjs
+```
+
+## v1.0-beta 发布准备
+
+v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Decision、Workflow、Task、审批、资源和审计边界不变，只收紧首次使用说明、版本检查、发布文件可见性和可重复的 Todo 验收。详见 [v1.0-beta 发布审计](docs/v1.0-beta-release-audit.md)。
 
 ## 架构
 
@@ -206,6 +234,10 @@ node .\runtime\workflow-runtime.test.mjs
 node .\runtime\supervisor-brain.test.mjs
 node .\runtime\runtime-retention.test.mjs
 node .\runtime\harness-runner.test.mjs
+node .\runtime\provider-preflight.test.mjs
+node .\runtime\failure-catalog.test.mjs
+node .\workspace\autonomous-beta-demo\demo.test.mjs
+node .\workspace\release-beta-todo-demo\demo.test.mjs
 node .\mcp-server\supervisor-dashboard-routes.test.mjs
 node .\mcp-server\supervisor-product-view.test.mjs
 ```

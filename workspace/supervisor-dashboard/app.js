@@ -12,10 +12,12 @@ let selectedWorkflowId = null;
 let selectedWorkflow = null;
 let timer = null;
 let actionPending = false;
+let preflightPending = false;
 let pendingDecision = null;
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[char]);
 const statusLabel = (status) => STATUS_LABELS[status] || String(status || "Unknown").replaceAll("_", " ");
+const sentenceLabel = (status) => { const label = statusLabel(status); return `${label.charAt(0).toUpperCase()}${label.slice(1)}`; };
 const formatTime = (value) => value ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" }).format(new Date(value)) : "—";
 const formatDuration = (seconds) => seconds == null ? "—" : seconds < 60 ? `${Math.round(seconds)} sec` : seconds < 3600 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} sec` : `${Math.floor(seconds / 3600)} hr ${Math.round((seconds % 3600) / 60)} min`;
 const formatCost = (value) => Number(value) > 0 ? `$${Number(value).toFixed(3)}` : "$0.000";
@@ -56,6 +58,15 @@ function setMessage(message, tone = "info") {
   const node = $("action-message");
   node.textContent = message || "";
   node.dataset.tone = tone;
+}
+
+function renderPreflight(result) {
+  const state = result?.status === "ok" ? "ok" : result?.status === "failed" ? "failed" : "unknown";
+  $("provider-preflight").dataset.status = state;
+  $("preflight-status").textContent = state === "ok" ? "Provider reachable" : state === "failed" ? sentenceLabel(result.classification) : "Provider not checked";
+  $("preflight-detail").textContent = result ? `${result.message} · ${formatTime(result.checkedAt)}` : "Fixed probe · no project content · no tools";
+  $("run-preflight").disabled = preflightPending;
+  $("run-preflight").textContent = preflightPending ? "Testing…" : "Test provider";
 }
 
 function renderOverview() {
@@ -157,6 +168,30 @@ function renderApproval(workflow) {
   $("reject-workflow").disabled = actionPending;
 }
 
+function renderFailureRecovery(workflow) {
+  const product = workflow.product || {};
+  const failure = product.failure;
+  const recovery = product.recovery || {};
+  const panel = $("recovery-panel");
+  panel.classList.toggle("hidden", !failure);
+  if (!failure) return;
+  $("failure-category").textContent = `${failure.stageLabel} · ${statusLabel(failure.category)}`;
+  const history = recovery.recoveries || [];
+  $("failure-content").innerHTML = `
+    <div><span class="label">Failed stage</span><strong>${escapeHtml(failure.stageLabel)}</strong><p>${escapeHtml(failure.title)}</p></div>
+    <div><span class="label">What happened</span><p>${escapeHtml(failure.explanation)}</p><code>${escapeHtml(failure.code)}</code></div>
+    <div><span class="label">Recommended recovery</span>${listHtml(failure.recoverySteps)}</div>
+    <details><summary>Technical error</summary><pre>${escapeHtml(failure.message)}</pre>${failure.taskId ? `<code>${escapeHtml(failure.taskId)}</code>` : ""}</details>
+    ${recovery.sourceWorkflowId ? `<div><span class="label">Recovered from</span><button class="workflow-link" type="button" data-linked-workflow="${escapeHtml(recovery.sourceWorkflowId)}">${escapeHtml(recovery.sourceWorkflowId)}</button></div>` : ""}
+    ${history.length ? `<div><span class="label">Recovery history</span>${history.map((item) => `<button class="workflow-link" type="button" data-linked-workflow="${escapeHtml(item.workflowId)}">${escapeHtml(item.workflowId)}</button>`).join("")}</div>` : ""}`;
+  $("recovery-form").classList.toggle("hidden", !recovery.available);
+  $("retry-workflow").disabled = actionPending;
+  panel.querySelectorAll("[data-linked-workflow]").forEach((node) => node.addEventListener("click", () => {
+    selectedWorkflowId = node.dataset.linkedWorkflow;
+    renderSelectedWorkflow().catch(showError);
+  }));
+}
+
 function resultCard(title, eyebrow, content, tone = "") {
   return `<article class="panel result-card ${tone}"><p class="eyebrow">${escapeHtml(eyebrow)}</p><h2>${escapeHtml(title)}</h2>${content}</article>`;
 }
@@ -221,6 +256,7 @@ async function renderSelectedWorkflow() {
   $("next-action").innerHTML = `<span>Next action</span><strong>${escapeHtml(product.nextAction || "Wait for the runtime.")}</strong>`;
   renderStageTimeline(workflow);
   renderDecision(workflow);
+  renderFailureRecovery(workflow);
   renderApproval(workflow);
   renderResults(workflow);
   renderPolicy(workflow);
@@ -231,8 +267,9 @@ async function renderSelectedWorkflow() {
 async function refresh() {
   clearTimeout(timer);
   try {
-    const payload = await requestJson("/api/supervisor/workflows?limit=50");
+    const [payload, preflightPayload] = await Promise.all([requestJson("/api/supervisor/workflows?limit=50"), requestJson("/api/supervisor/provider-preflight")]);
     workflows = payload.workflows || [];
+    renderPreflight(preflightPayload.latest);
     if (!selectedWorkflowId && workflows.length) selectedWorkflowId = workflows[0].workflowId;
     if (selectedWorkflowId && !workflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) selectedWorkflowId = workflows[0]?.workflowId || null;
     renderOverview();
@@ -334,6 +371,44 @@ $("reject-workflow").addEventListener("click", async () => {
     await refresh();
   } catch (error) { setMessage(error.message, "error"); }
   finally { actionPending = false; if (selectedWorkflow) renderApproval(selectedWorkflow); }
+});
+
+$("run-preflight").addEventListener("click", async () => {
+  if (preflightPending) return;
+  preflightPending = true;
+  renderPreflight(null);
+  setMessage("Running an isolated provider probe. No project content or tools are available.");
+  try {
+    const payload = await postJson("/api/supervisor/provider-preflight", { timeoutSeconds: 60 });
+    renderPreflight(payload.result);
+    setMessage("Provider preflight succeeded.", "success");
+  } catch (error) {
+    renderPreflight(error.payload?.result || { status: "failed", classification: "preflight_error", message: error.message, checkedAt: new Date().toISOString() });
+    setMessage(error.payload?.result?.message || error.message, "error");
+  } finally {
+    preflightPending = false;
+    $("run-preflight").disabled = false;
+    $("run-preflight").textContent = "Test provider";
+  }
+});
+
+$("recovery-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (actionPending || !selectedWorkflowId) return;
+  const requestedBy = $("recovery-operator").value.trim();
+  const recoveryReason = $("recovery-reason").value.trim();
+  if (!requestedBy || !recoveryReason) return;
+  actionPending = true;
+  $("retry-workflow").disabled = true;
+  setMessage("Creating a new Workflow from Planning. Previous approval will not be reused.");
+  try {
+    const payload = await postJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/retry`, { requestedBy, recoveryReason });
+    selectedWorkflowId = payload.workflow.workflowId;
+    $("recovery-reason").value = "";
+    setMessage("Recovery Workflow created. A new read-only plan has started.", "success");
+    await refresh();
+  } catch (error) { setMessage(error.message, "error"); }
+  finally { actionPending = false; if ($("retry-workflow")) $("retry-workflow").disabled = false; }
 });
 
 $("refresh").addEventListener("click", refresh);
