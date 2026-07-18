@@ -73,6 +73,8 @@ The Beta product layer adds three bounded mutation APIs without changing Task Ru
 - `POST /api/supervisor/workflows/:workflowId/approve` calls the existing Workflow approval path;
 - `POST /api/supervisor/workflows/:workflowId/reject` records a human rejection and ends the Workflow before the approval-gated Task is created.
 
+The Dashboard also exposes `PATCH /api/supervisor/workflows/:workflowId/metadata` for local display names and archive state. This metadata is stored separately from Workflow snapshots and events, is protected by the same local Console Origin check, and cannot start or advance a Task.
+
 These routes do not expose a generic Task or Harness execution endpoint. Approval still binds to the exact coder prompt hash and capability boundary. Rejection records reviewer, reason, time, Stage, and `approval_rejected` failure evidence; it never creates coder.
 
 Artifact reads are limited to known Harness result files belonging to an Attempt recorded by that Task.
@@ -93,7 +95,7 @@ runtime-data/
         <attempt-id>.json
 ```
 
-The Attempt stores a run ID and artifact filenames. Worker artifacts are not copied from `.agents/runs` or `.agent-runs`.
+The Attempt stores a run ID and artifact filenames. For orchestrated v1.3 work, Workflow, Task, and Attempt also snapshot `projectId`, registered `workspacePath`, and `sessionId`. Task and Attempt separately record the actual Harness `executionDirectory`, so the bound project and process cwd remain auditable. Legacy snapshots without these additive fields remain valid. Worker artifacts are not copied from `.agents/runs` or `.agent-runs`.
 
 ## Resource Profile v0.1
 

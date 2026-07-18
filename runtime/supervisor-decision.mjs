@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { resolveResourceProfile } from "./resource-profiles.mjs";
 
 const INTENTS = new Set(["code_change", "documentation_change", "analysis", "conversation", "unknown"]);
-const NEXT_ACTIONS = new Set(["create_workflow", "confirm_project", "respond_directly"]);
+const NEXT_ACTIONS = new Set(["create_workflow", "confirm_project", "respond_directly", "request_clarification"]);
 
 function nowIso() { return new Date().toISOString(); }
 function boundedConfidence(value, fallback) {
@@ -78,10 +78,9 @@ export class SupervisorDecisionLayer {
     const projectResolution = this.projectRegistry.resolve(request, { selector: project || proposed?.project || proposed?.projectId || null });
     const proposedNextAction = String(proposed?.nextAction || "").trim();
     if (proposedNextAction && !NEXT_ACTIONS.has(proposedNextAction)) throw new Error(`Unsupported Supervisor nextAction: ${proposedNextAction}`);
-    const nextAction = proposedNextAction === "respond_directly" ? "respond_directly" : projectResolution.status !== "selected" ? "confirm_project" : proposedNextAction || "create_workflow";
+    const requestedNextAction = proposedNextAction === "respond_directly" ? "respond_directly" : projectResolution.status !== "selected" ? "confirm_project" : proposedNextAction || "create_workflow";
     const intent = String(proposed?.intent || intentForWorkflow(plan.workflowType)).trim();
     if (!INTENTS.has(intent)) throw new Error(`Unsupported Supervisor intent: ${intent}`);
-    assertDecisionConsistency(intent, plan.workflowType, nextAction, projectResolution);
     const source = proposed ? "gpt" : "local_rules";
     const reasoning = Array.isArray(proposed?.reasoning) && proposed.reasoning.length
       ? proposed.reasoning.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
@@ -91,28 +90,69 @@ export class SupervisorDecisionLayer {
       ...(projectResolution.project ? [...(projectResolution.project.defaultConstraints || []), `Only inspect or modify files under registered project '${projectResolution.project.path}'.`, "Do not explore sibling projects or other workspace directories."] : [])
     ])];
     const technicalSummary = String(proposed?.technical_summary || `${plan.goal} ${projectResolution.project ? `in '${projectResolution.project.name}'` : "after the target project is confirmed"}; recommended Workflow: ${plan.workflowType}.`).trim();
-    const defaultRisks = nextAction === "respond_directly"
+    const implementationStrategy = String(proposed?.implementation_strategy || (requestedNextAction === "respond_directly"
+      ? "No local implementation is required; answer the user directly and make the reasoning explicit."
+      : plan.workflowType === "analysis_only"
+        ? "Inspect only the registered project, trace the relevant implementation path, and report evidence without modifying files."
+        : "Use the Planner to identify the smallest relevant file set, preserve existing behavior, and implement only the approved bounded change.")).trim();
+    const expectedChanges = stringList(proposed?.expected_changes, requestedNextAction === "create_workflow" && plan.workflowType !== "analysis_only"
+      ? ["Planner must identify the exact files and behavior expected to change before approval."]
+      : [], 20);
+    const validationPlan = stringList(proposed?.validation_plan, requestedNextAction === "create_workflow"
+      ? ["Run focused checks for the requested behavior.", "Reviewer must verify the result against the original goal and report regressions or remaining risks."]
+      : [], 20);
+    const projectContext = projectResolution.project ? this.projectRegistry.getProjectContext(projectResolution.project.id) : null;
+    const supervisorContext = projectContext?.supervisorContext || { available: false, file: "AI_SUPERVISOR.md", digest: null };
+    const defaultRisks = requestedNextAction === "respond_directly"
       ? ["No local Worker will run; the response remains the responsibility of the GPT Supervisor."]
-      : nextAction === "confirm_project"
+      : requestedNextAction === "confirm_project"
         ? ["The target project is ambiguous; starting a Worker before confirmation would risk modifying the wrong project."]
         : ["The external Worker may inspect files inside the registered project.", ...(plan.workflowType === "analysis_only" ? [] : ["Any write-capable stage remains blocked until explicit human approval."])];
-    const recommendedActions = stringList(proposed?.recommended_actions, nextAction === "respond_directly"
+    let recommendedActions = stringList(proposed?.recommended_actions, requestedNextAction === "respond_directly"
       ? ["Answer the user directly without creating a local Workflow."]
-      : nextAction === "confirm_project"
+      : requestedNextAction === "confirm_project"
         ? ["Ask the user to select one registered project before starting a Worker."]
         : [`Create the '${plan.workflowType}' Workflow.`, "Review the Planner result and risks before any approval-gated execution."], 12);
-    const estimatedResources = workflowResources(this.workflowPlanner, plan.workflowType, nextAction, proposed?.estimated_resources || null);
+    const estimatedResources = workflowResources(this.workflowPlanner, plan.workflowType, requestedNextAction, proposed?.estimated_resources || null);
     const risks = stringList(proposed?.risks, defaultRisks, 12);
     if (!estimatedResources.within_hard_caps) risks.push("Estimated resources exceed the selected Workflow profile envelope.");
+    const decisionConfidence = boundedConfidence(proposed?.confidence, projectResolution.status === "selected" ? (proposed ? 0.9 : 0.78) : 0.4);
+    const goalConfidence = boundedConfidence(proposed?.goalConfidence, proposed ? decisionConfidence : 0.78);
+    const possibleIntentMismatch = String(proposed?.possibleIntentMismatch || "").trim() || null;
+    const clarificationReasons = [];
+    if (projectResolution.status !== "selected") clarificationReasons.push("target_project_requires_confirmation");
+    if (possibleIntentMismatch) clarificationReasons.push("possible_intent_mismatch");
+    if (goalConfidence < 0.6) clarificationReasons.push("low_goal_confidence");
+    if (estimatedResources.complexity === "high" && goalConfidence < 0.75) clarificationReasons.push("high_impact_with_uncertain_goal");
+    if (proposed?.clarificationNeeded === true) clarificationReasons.push("supervisor_requested_clarification");
+    if (proposedNextAction === "request_clarification") clarificationReasons.push("supervisor_requested_clarification");
+    const clarificationNeeded = clarificationReasons.length > 0;
+    const nextAction = clarificationNeeded && requestedNextAction === "create_workflow" ? "request_clarification" : requestedNextAction;
+    if (nextAction === "request_clarification") recommendedActions = ["Ask the user to clarify the identified goal ambiguity before creating a Workflow."];
+    assertDecisionConsistency(intent, plan.workflowType, nextAction, projectResolution);
     const createdAt = nowIso();
+    const memorySnapshot = projectContext?.memory
+      ? { projectId: projectResolution.project?.id || null, ...projectContext.memory, capturedAt: createdAt, content: projectContext.projectMemory || "" }
+      : { projectId: projectResolution.project?.id || null, available: false, file: "PROJECT_MEMORY.md", digest: null, lastUpdated: null, size: 0, capturedAt: createdAt, content: "" };
     return {
-      schemaVersion: 2,
+      schemaVersion: 6,
       decisionId: `decision_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
       intent,
       goal: String(proposed?.goal || request).trim(),
+      goalConfidence,
+      possibleIntentMismatch,
+      clarificationNeeded,
+      clarificationReasons: [...new Set(clarificationReasons)],
       technical_summary: technicalSummary,
+      implementation_strategy: implementationStrategy,
+      expected_changes: expectedChanges,
+      validation_plan: validationPlan,
+      supervisor_context: { projectId: projectResolution.project?.id || null, ...supervisorContext },
+      project_memory: memorySnapshot,
       originalRequest: request,
       project: projectResolution.project,
+      projectId: projectResolution.project?.projectId || null,
+      workspacePath: projectResolution.project?.workspacePath || null,
       projectResolution: { status: projectResolution.status, method: projectResolution.method, candidates: projectResolution.candidates },
       reasoning,
       risks: [...new Set(risks)],
@@ -120,34 +160,70 @@ export class SupervisorDecisionLayer {
       constraints,
       estimated_resources: estimatedResources,
       recommended_actions: recommendedActions,
-      confidence: boundedConfidence(proposed?.confidence, projectResolution.status === "selected" ? (proposed ? 0.9 : 0.78) : 0.4),
+      confidence: decisionConfidence,
       nextAction,
       agentRequired: nextAction === "create_workflow",
       source,
-      status: nextAction === "confirm_project" ? "waiting_project_confirmation" : nextAction === "respond_directly" ? "decision_only" : "ready",
+      status: nextAction === "confirm_project" ? "waiting_project_confirmation" : nextAction === "request_clarification" ? "waiting_for_clarification" : nextAction === "respond_directly" ? "decision_only" : "ready",
       workflowId: null,
       createdAt,
       updatedAt: createdAt
     };
   }
 
+  resolveClarification(decision, clarificationResponse, proposedDecision = null) {
+    if (!decision || decision.status !== "waiting_for_clarification") throw new Error("Decision is not waiting for clarification.");
+    const response = String(clarificationResponse || "").trim();
+    if (!response) throw new Error("clarificationResponse is required.");
+    const proposed = proposedDecision && typeof proposedDecision === "object" ? proposedDecision : {};
+    const regenerated = this.decide(`${decision.originalRequest}\n\nUser clarification: ${response}`, {
+      project: decision.projectId,
+      definitionId: proposed.workflowType || decision.workflowType,
+      proposedDecision: {
+        ...proposed,
+        intent: proposed.intent || decision.intent,
+        goal: proposed.goal || `${decision.goal} — clarified: ${response}`,
+        reasoning: stringList(proposed.reasoning, [...(decision.reasoning || []), `User clarified the goal: ${response}`], 12),
+        workflowType: proposed.workflowType || decision.workflowType,
+        confidence: boundedConfidence(proposed.confidence, Math.max(0.8, Number(decision.confidence || 0))),
+        goalConfidence: boundedConfidence(proposed.goalConfidence, Math.max(0.8, Number(decision.goalConfidence || 0))),
+        possibleIntentMismatch: proposed.possibleIntentMismatch || null,
+        clarificationNeeded: false,
+        nextAction: "create_workflow"
+      }
+    });
+    return { ...regenerated, originalRequest: decision.originalRequest, clarification: { supersedesDecisionId: decision.decisionId, response, resolvedAt: nowIso() } };
+  }
+
   confirmProject(decision, projectId) {
     if (!decision || decision.status !== "waiting_project_confirmation") throw new Error("Decision is not waiting for project confirmation.");
     const resolution = this.projectRegistry.resolve(decision.originalRequest, { selector: projectId });
     const updatedAt = nowIso();
+    const projectContext = this.projectRegistry.getProjectContext(resolution.project.id);
+    const supervisorContext = projectContext.supervisorContext;
+    const memoryCapturedAt = nowIso();
+    const clarificationReasons = (decision.clarificationReasons || []).filter((reason) => reason !== "target_project_requires_confirmation");
+    const requiresClarification = clarificationReasons.length > 0;
     return {
       ...decision,
+      schemaVersion: 6,
       project: resolution.project,
+      projectId: resolution.project.projectId,
+      workspacePath: resolution.project.workspacePath,
       projectResolution: { status: "selected", method: "user_confirmed", candidates: [] },
       technical_summary: `${decision.technical_summary} Confirmed target: '${resolution.project.name}' (${resolution.project.path}).`,
+      supervisor_context: { projectId: resolution.project.id, ...supervisorContext },
+      project_memory: { projectId: resolution.project.id, ...projectContext.memory, capturedAt: memoryCapturedAt, content: projectContext.projectMemory || "" },
+      clarificationNeeded: requiresClarification,
+      clarificationReasons,
       reasoning: [...decision.reasoning, `User confirmed registered project '${resolution.project.name}'.`],
       risks: (decision.risks || []).filter((risk) => !risk.includes("target project is ambiguous")),
       constraints: [...new Set([...(decision.constraints || []), ...(resolution.project.defaultConstraints || []), `Only inspect or modify files under registered project '${resolution.project.path}'.`, "Do not explore sibling projects or other workspace directories."])],
-      recommended_actions: [`Create the '${decision.workflowType}' Workflow for the confirmed project.`, "Review the Planner result and risks before any approval-gated execution."],
+      recommended_actions: requiresClarification ? ["Ask the user to clarify the remaining goal ambiguity before creating a Workflow."] : [`Create the '${decision.workflowType}' Workflow for the confirmed project.`, "Review the Planner result and risks before any approval-gated execution."],
       confidence: Math.max(Number(decision.confidence || 0), 0.95),
-      nextAction: "create_workflow",
-      agentRequired: true,
-      status: "ready",
+      nextAction: requiresClarification ? "request_clarification" : "create_workflow",
+      agentRequired: !requiresClarification,
+      status: requiresClarification ? "waiting_for_clarification" : "ready",
       updatedAt
     };
   }

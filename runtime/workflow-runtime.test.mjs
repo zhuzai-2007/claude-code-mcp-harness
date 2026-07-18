@@ -9,10 +9,11 @@ import { WorkflowRuntime, WORKFLOW_ROLE_MODES } from "./workflow-runtime.mjs";
 import { loadWorkflowDefinitions } from "./workflow-definitions.mjs";
 import { WorkflowPlanner } from "./workflow-planner.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".agent-runs", `workflow-runtime-test-${process.pid}-${Date.now()}`);
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.join(projectRoot, ".agent-runs", `workflow-runtime-test-${process.pid}-${Date.now()}`);
 
 class FakeRunner {
-  constructor() { this.counter = 0; this.calls = []; }
+  constructor() { this.counter = 0; this.calls = []; this.projectRoot = projectRoot; }
   generateAttemptId() { this.counter += 1; return `20260714-120000-${String(this.counter).padStart(3, "0")}`; }
   async runAttempt(input) {
     this.calls.push(input);
@@ -115,6 +116,29 @@ try {
   assert(events.events.some((event) => event.type === "workflow.approval_requested"));
   assert(events.events.some((event) => event.type === "workflow.approval_completed"));
   assert(events.events.some((event) => event.type === "workflow.completed"));
+  const stableEventKey = (event) => `${event.source}:${event.taskId || event.workflowId}:${event.eventId || event.sourceSequence}`;
+  const stableSequences = new Map(events.events.map((event) => [stableEventKey(event), event.sequence]));
+  const plannerEvents = await taskStore.readEvents(plannerTaskId, { afterSequence: 0, limit: Number.MAX_SAFE_INTEGER });
+  const lateSourceSequence = Math.max(...plannerEvents.map((event) => Number(event.sequence) || 0)) + 1;
+  await taskStore.appendEvent(plannerTaskId, {
+    schemaVersion: 1,
+    eventId: `${plannerTaskId}:${lateSourceSequence}`,
+    sequence: lateSourceSequence,
+    timestamp: "2000-01-01T00:00:00.000Z",
+    taskId: plannerTaskId,
+    type: "task.synthetic_late_event",
+    source: "task_runtime",
+    payload: { fixture: true }
+  });
+  const latePage = await workflowRuntime.getWorkflowEvents(created.workflowId, { afterSequence: events.lastSequence, limit: 100 });
+  assert.equal(latePage.events.length, 1, "A late Task event must remain visible after the previous Workflow cursor");
+  assert.equal(latePage.events[0].type, "task.synthetic_late_event");
+  assert(latePage.events[0].sequence > events.lastSequence, "A newly discovered event must receive a new monotonic Workflow sequence");
+  const eventsAfterLateArrival = await workflowRuntime.getWorkflowEvents(created.workflowId);
+  for (const event of eventsAfterLateArrival.events) {
+    const previous = stableSequences.get(stableEventKey(event));
+    if (previous) assert.equal(event.sequence, previous, `Workflow event sequence drifted for ${event.eventId}`);
+  }
 
   const persisted = JSON.parse(await readFile(path.join(root, "workflows", created.workflowId, "workflow.json"), "utf8"));
   assert.equal(persisted.status, "completed");
@@ -128,8 +152,14 @@ try {
       intent: "analysis",
       goal: "Inspect the registered task board",
       technical_summary: "Inspect only the registered task board and report bounded findings.",
+      implementation_strategy: "Trace the task board state path without modifying files.",
+      expected_changes: [],
+      validation_plan: ["Confirm the relevant state and rendering paths from source evidence."],
+      supervisor_context: { projectId: "dogfood-study-board", file: "AI_SUPERVISOR.md", digest: "fixture", instructions: "SUPERVISOR_ONLY_SENTINEL" },
       originalRequest: "Inspect the registered task board",
-      project: { id: "dogfood-study-board", name: "Dogfood Study Board", path: "workspace/dogfood-study-board", description: "fixture", language: "JavaScript", lastUsed: null },
+      projectId: "dogfood-study-board",
+      workspacePath: path.join(projectRoot, "workspace", "dogfood-study-board").replaceAll("\\", "/"),
+      project: { projectId: "dogfood-study-board", id: "dogfood-study-board", name: "Dogfood Study Board", workspacePath: path.join(projectRoot, "workspace", "dogfood-study-board").replaceAll("\\", "/"), path: "workspace/dogfood-study-board", description: "fixture", language: "JavaScript", lastUsed: null },
       reasoning: ["The request is read-only and targets one registered project."],
       risks: ["Analysis may be incomplete if relevant files are outside the registered project."],
       workflowType: "analysis_only",
@@ -139,16 +169,34 @@ try {
       constraints: ["Only inspect or modify files under registered project 'workspace/dogfood-study-board'."],
       nextAction: "create_workflow",
       source: "gpt"
-    }
+    },
+    session: { sessionId: "session_runtime_fixture", projectId: "dogfood-study-board", name: "Runtime fixture", workflowIds: [] }
   });
   assert.equal(decisionWorkflow.workflowPlan.selection, "supervisor_decision");
   assert.equal(decisionWorkflow.supervisorDecision.decisionId, "decision_runtime_fixture");
   assert.equal(decisionWorkflow.project.path, "workspace/dogfood-study-board");
+  assert.equal(decisionWorkflow.projectId, "dogfood-study-board");
+  assert.equal(decisionWorkflow.workspacePath, path.join(projectRoot, "workspace", "dogfood-study-board").replaceAll("\\", "/"));
+  assert.equal(decisionWorkflow.sessionId, "session_runtime_fixture");
   const decisionTask = await taskRuntime.getTask(decisionWorkflow.tasks[0].taskId);
+  assert.equal(decisionTask.projectId, "dogfood-study-board");
+  assert.equal(decisionTask.workspacePath, decisionWorkflow.workspacePath);
+  assert.equal(decisionTask.sessionId, "session_runtime_fixture");
+  assert.equal(decisionTask.executionDirectory, projectRoot.replaceAll("\\", "/"), "Task must record the actual Harness execution directory separately from the bound workspace");
   assert.match(decisionTask.prompt, /Supervisor decision \(authoritative task context\)/);
   assert.match(decisionTask.prompt, /Inspect only the registered task board/);
+  assert.match(decisionTask.prompt, /implementation_strategy/);
+  assert.match(decisionTask.prompt, /Trace the task board state path/);
+  assert.match(decisionTask.prompt, /expected_changes/);
+  assert.match(decisionTask.prompt, /acceptance_criteria/);
+  assert.match(decisionTask.prompt, /Confirm the relevant state and rendering paths/);
+  assert.doesNotMatch(decisionTask.prompt, /SUPERVISOR_ONLY_SENTINEL/, "AI_SUPERVISOR.md content must not become a Worker prompt");
   assert.match(decisionTask.prompt, /Do not inspect sibling projects/);
-  await waitForTask(taskRuntime, decisionWorkflow.tasks[0].taskId);
+  const completedDecisionTask = await waitForTask(taskRuntime, decisionWorkflow.tasks[0].taskId);
+  assert.equal(completedDecisionTask.attempts[0].projectId, "dogfood-study-board");
+  assert.equal(completedDecisionTask.attempts[0].workspacePath, decisionWorkflow.workspacePath);
+  assert.equal(completedDecisionTask.attempts[0].executionDirectory, projectRoot.replaceAll("\\", "/"));
+  assert.equal(completedDecisionTask.attempts[0].sessionId, "session_runtime_fixture");
   await workflowRuntime.reconcileWorkflow(decisionWorkflow.workflowId);
   const decisionEvents = await workflowRuntime.getWorkflowEvents(decisionWorkflow.workflowId);
   assert.equal(decisionEvents.events[0].type, "workflow.supervisor_decision_recorded");
@@ -231,7 +279,7 @@ try {
   assert.equal(backgroundWaiting.status, "waiting_approval", "Background Orchestrator did not advance planner completion without a status query");
   assert.equal(backgroundWaiting.stages.find((stage) => stage.role === "coder").taskId, null);
   await backgroundRuntime.approveWorkflow(background.workflowId, { approvedBy: "background-test", approvalReason: "Approve background bounded flow." });
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 800));
   const backgroundCompleted = await workflowStore.readWorkflow(background.workflowId);
   assert.equal(backgroundCompleted.status, "completed", "Background Orchestrator did not create coder/reviewer and complete without polling getWorkflow");
   backgroundRuntime.stop();
@@ -243,6 +291,31 @@ try {
   const legacy = await workflowRuntime.getWorkflow("workflow_legacy_fixture");
   assert.equal(legacy.status, "succeeded");
   assert.equal(legacy.orchestrated, undefined);
+  assert.equal(legacy.projectId, undefined, "Legacy Workflow remains readable without a Project binding");
+
+  await workflowStore.createWorkflow({
+    schemaVersion: 1,
+    workflowId: "workflow_legacy_create_fixture",
+    userRequest: "Legacy createTask compatibility",
+    status: "created",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    projectBinding: { projectId: "legacy-project", workspacePath: projectRoot.replaceAll("\\", "/") },
+    sessionId: "session_legacy_fixture",
+    tasks: [],
+    lastEventSequence: 0
+  });
+  await workflowStore.appendEvent("workflow_legacy_create_fixture", { schemaVersion: 1, eventId: "workflow_legacy_create_fixture:4", sequence: 4, timestamp, workflowId: "workflow_legacy_create_fixture", type: "workflow.legacy_fixture", source: "workflow_runtime", payload: {} });
+  const restartedWorkflowRuntime = new WorkflowRuntime({ store: workflowStore, taskRuntime, definitions, workflowPlanner, autoReconcile: false });
+  await restartedWorkflowRuntime.start();
+  assert.equal((await workflowStore.readWorkflow("workflow_legacy_create_fixture")).lastEventSequence, 4, "Workflow restart did not recover the durable event sequence");
+  const legacyCreated = await restartedWorkflowRuntime.createTask("workflow_legacy_create_fixture", { role: "planner", prompt: "Legacy bounded plan", mockWorker: true });
+  assert.equal(legacyCreated.task.projectId, "legacy-project");
+  assert.equal(legacyCreated.task.sessionId, "session_legacy_fixture");
+  const legacyCreateEvents = await workflowStore.readEvents("workflow_legacy_create_fixture");
+  assert.equal(legacyCreateEvents.at(-1).sequence, 5);
+  assert.equal(legacyCreateEvents.at(-1).eventId, "workflow_legacy_create_fixture:5");
+  await waitForTask(taskRuntime, legacyCreated.task.taskId);
 
   console.log(JSON.stringify({ ok: true, workflowId: created.workflowId, plannerTaskId, coderTaskId: coderStage.taskId, reviewerTaskId: reviewerStage.taskId, finalStatus: completed.status, failedStage: failedWorkflow.failure.failedStage }, null, 2));
 } finally {

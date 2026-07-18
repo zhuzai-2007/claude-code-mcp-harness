@@ -24,7 +24,7 @@ $effectiveTarget = if ([string]::IsNullOrWhiteSpace($TargetProject)) { $sourcePr
 $targetRoot = Resolve-FullPathExistingOrParent $effectiveTarget
 
 if ($targetRoot.TrimEnd('\') -eq $sourceProject.TrimEnd('\')) {
-    Write-Host "Setting up Supervisor v1.0 Beta in: $sourceProject" -ForegroundColor Cyan
+    Write-Host "Setting up Supervisor v1.8 Beta in: $sourceProject" -ForegroundColor Cyan
     & (Join-Path $sourceProject 'scripts\init-config.ps1') -ProjectRoot $sourceProject
     if (-not $SkipDependencies) {
         if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "node was not found. Install Node.js 20 or newer, reopen PowerShell, and run .\install.ps1 again." }

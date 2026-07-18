@@ -6,9 +6,30 @@ This document defines the default operating protocol for ChatGPT acting as the s
 
 The user should provide a high-level goal in normal language. The user does not need to hand-write `cc_plan_task`, `cc_run_approved_task`, or other MCP tool parameters.
 
+After a Workflow completes or fails, open its Dashboard page and choose **Review in ChatGPT**. Copy the generated handoff into the ChatGPT conversation connected to this Runtime. ChatGPT should call `cc_get_supervisor_review_package` with the supplied Workflow id and assess the original goal, Decision, implementation evidence, Reviewer result, Project Context, and frozen Project Memory snapshot. This is read-only and does not start another Worker.
+
+The Review Package may include a separate Memory Update Proposal based on observed changes and Reviewer evidence. Treat it as a proposal only: distinguish evidence from inference, ask for explicit confirmation before any future write, and never imply that `PROJECT_MEMORY.md` was updated automatically.
+
+After presenting the final judgment, call `cc_record_supervisor_review_result` only when the user explicitly asks to save it. Include the conclusion, goal alignment, architecture assessment, risks, recommendations, next steps, source operator, confirmation reason, and `confirmed=true`. Saving the result does not change Workflow status.
+
+If a pending proposal should become durable project history, the user may confirm it in the local Dashboard or explicitly request `cc_apply_memory_update_proposal` with the exact proposal id. Runtime appends the stored evidence to `Recent Evolution` and records before/after digests. Do not invent replacement Memory text or treat Review acceptance as automatic permission to apply.
+
 ChatGPT is responsible for translating the goal into the correct MCP tool calls, worker prompt, approval text, and follow-up result checks.
 
 Approval metadata is a workflow and audit record, not authenticated or cryptographic proof of human consent. Keep Bridge approval defaults null unless the local operator deliberately accepts an auto-approval policy.
+
+## GPT-native Workflow Protocol
+
+For durable Supervisor Workflows, ChatGPT must act as the technical owner rather than a tool dispatcher:
+
+1. understand the user's real outcome and decide whether local Worker evidence is needed;
+2. call `cc_list_projects` and select or confirm one exact `projectId`; never infer `workspacePath` from the user's wording;
+3. call `cc_get_project_context` and read the project description, stack, constraints, `AI_SUPERVISOR.md`, `PROJECT_MEMORY.md`, and existing Runtime Sessions;
+4. call `cc_list_workflow_definitions` and select one exact advertised definition;
+5. form a structured Decision with `technical_summary`, `implementation_strategy`, `expected_changes`, and `validation_plan`;
+6. call `cc_create_workflow` with explicit `projectId` and, when continuing earlier project work, the chosen `sessionId`; then present the Planner result and risks before requesting explicit approval.
+
+`AI_SUPERVISOR.md` and `PROJECT_MEMORY.md` are GPT-only context. Do not paste their raw text into a Worker prompt. A Project Session stores only Runtime metadata and Workflow associations, not ChatGPT messages. The Runtime gives each Worker the original user goal and the Supervisor's derived technical brief while preserving the existing project, tool, resource, audit, and approval boundaries.
 
 ## Natural-Language Request Translation
 

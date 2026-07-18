@@ -41,6 +41,49 @@ function Get-CommandCheck {
     return New-Check $Name "ok" $detail "" $Required
 }
 
+function Get-NvmNodeContext {
+    $roots = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($env:NVM_HOME)) { $roots.Add([string]$env:NVM_HOME) }
+    $nvmCommand = Get-Command "nvm" -ErrorAction SilentlyContinue
+    if ($nvmCommand -and $nvmCommand.Source) { $roots.Add((Split-Path -Parent $nvmCommand.Source)) }
+
+    foreach ($candidate in @($roots | Select-Object -Unique)) {
+        try { $root = [System.IO.Path]::GetFullPath($candidate) } catch { continue }
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        $versions = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Name -match '^v?(\d+\.\d+\.\d+)$' -and (Test-Path -LiteralPath (Join-Path $_.FullName "node.exe") -PathType Leaf)) {
+                [pscustomobject]@{ Text = $Matches[1]; Version = [version]$Matches[1] }
+            }
+        } | Sort-Object Version -Descending)
+        return [pscustomobject]@{ Root = $root; Versions = @($versions.Text) }
+    }
+    return $null
+}
+
+function Get-NodeCheck {
+    $command = Get-Command "node" -ErrorAction SilentlyContinue
+    if ($command) {
+        $detail = $command.Source
+        try {
+            $versionText = (& $command.Source --version 2>&1 | Out-String).Trim()
+            if ($versionText) { $detail = ($versionText -split "`r?`n")[0] }
+        } catch {}
+        return New-Check "node" "ok" $detail "" $true
+    }
+
+    $nvm = Get-NvmNodeContext
+    if ($nvm) {
+        $available = if ($nvm.Versions.Count) { $nvm.Versions -join ", " } else { "none detected" }
+        $advice = if ($nvm.Versions.Count) {
+            "Run: nvm use $($nvm.Versions[0]), then reopen PowerShell."
+        } else {
+            "Use the existing nvm installation to install and select Node.js 20 or newer, then reopen PowerShell."
+        }
+        return New-Check "node" "error" "Not found on PATH. nvm: $($nvm.Root). Available Node versions: $available." $advice $true
+    }
+    return New-Check "node" "error" "Not found on PATH." "Install Node.js 20 or newer, then reopen PowerShell." $true
+}
+
 function Get-JsonCheck {
     param([string] $Name, [string] $Path, [string] $Advice)
     if (-not (Test-Path -LiteralPath $Path)) { return New-Check $Name "error" "Missing: $Path" $Advice $true }
@@ -53,7 +96,7 @@ function Get-JsonCheck {
 }
 
 $checks = [System.Collections.Generic.List[object]]::new()
-$checks.Add((Get-CommandCheck "node" $true "Install Node.js 20 or newer, then reopen PowerShell." -Version))
+$checks.Add((Get-NodeCheck))
 $checks.Add((Get-CommandCheck "npm" $true "Install npm with Node.js, then reopen PowerShell." -Version))
 $checks.Add((Get-CommandCheck "claude" $true "Install Claude Code CLI and confirm 'claude --version' works."))
 
@@ -105,19 +148,23 @@ if (Test-Path -LiteralPath $projectRegistryPath) {
         $registry = Get-Content -LiteralPath $projectRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $projectErrors = [System.Collections.Generic.List[string]]::new()
         foreach ($project in @($registry.projects)) {
-            if ([string]::IsNullOrWhiteSpace([string]$project.id) -or [string]::IsNullOrWhiteSpace([string]$project.path) -or [string]::IsNullOrWhiteSpace([string]$project.description)) { $projectErrors.Add("Each project requires id, path, and description.") }
-            if (@($project.techStack).Count -eq 0) { $projectErrors.Add("Project '$($project.id)' has no techStack.") }
-            if (@($project.aliases).Count -eq 0) { $projectErrors.Add("Project '$($project.id)' has no aliases.") }
-            if (@($project.defaultConstraints).Count -eq 0) { $projectErrors.Add("Project '$($project.id)' has no defaultConstraints.") }
+            $registeredId = [string]$(if ($project.projectId) { $project.projectId } else { $project.id })
+            $configuredPath = [string]$(if ($project.workspacePath) { $project.workspacePath } else { $project.path })
+            $configuredStack = @($(if ($project.stack) { $project.stack } else { $project.techStack }))
+            $configuredConstraints = @($(if ($project.constraints) { $project.constraints } else { $project.defaultConstraints }))
+            if ([string]::IsNullOrWhiteSpace($registeredId) -or [string]::IsNullOrWhiteSpace($configuredPath) -or [string]::IsNullOrWhiteSpace([string]$project.description)) { $projectErrors.Add("Each project requires projectId, workspacePath, and description.") }
+            if ($configuredStack.Count -eq 0) { $projectErrors.Add("Project '$registeredId' has no stack.") }
+            if (@($project.aliases).Count -eq 0) { $projectErrors.Add("Project '$registeredId' has no aliases.") }
+            if ($configuredConstraints.Count -eq 0) { $projectErrors.Add("Project '$registeredId' has no constraints.") }
             try {
-                $registeredPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot ([string]$project.path)))
+                $registeredPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $configuredPath))
                 $rootExact = $projectRoot.TrimEnd('\')
                 $rootPrefix = "$rootExact\"
                 $insideRoot = $registeredPath.TrimEnd('\').Equals($rootExact, [System.StringComparison]::OrdinalIgnoreCase) -or $registeredPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-                if (-not $insideRoot -or -not (Test-Path -LiteralPath $registeredPath -PathType Container)) { $projectErrors.Add("Project '$($project.id)' path is missing or outside projectRoot.") }
-            } catch { $projectErrors.Add("Project '$($project.id)' path is invalid.") }
+                if (-not $insideRoot -or -not (Test-Path -LiteralPath $registeredPath -PathType Container)) { $projectErrors.Add("Project '$registeredId' workspacePath is missing or outside projectRoot.") }
+            } catch { $projectErrors.Add("Project '$registeredId' workspacePath is invalid.") }
         }
-        $checks.Add((New-Check "Project context contract" $(if ($projectErrors.Count) { "error" } else { "ok" }) $(if ($projectErrors.Count) { ($projectErrors | Select-Object -Unique) -join " " } else { "$(@($registry.projects).Count) registered projects include stack, aliases, and default constraints." }) "Update .agents\projects.json before startup."))
+        $checks.Add((New-Check "Project context contract" $(if ($projectErrors.Count) { "error" } else { "ok" }) $(if ($projectErrors.Count) { ($projectErrors | Select-Object -Unique) -join " " } else { "$(@($registry.projects).Count) registered projects include projectId, workspacePath, stack, aliases, and constraints." }) "Update .agents\projects.json before startup."))
     } catch {
         $checks.Add((New-Check "Project context contract" "error" $_.Exception.Message "Repair .agents\projects.json."))
     }
@@ -192,7 +239,7 @@ if ($Json) {
     $result | ConvertTo-Json -Depth 8
 } else {
     Write-Host ""
-    Write-Host "Supervisor v1.0 Beta doctor" -ForegroundColor Cyan
+    Write-Host "Supervisor v1.8 Beta doctor" -ForegroundColor Cyan
     Write-Host "Repository: $repoRoot"
     Write-Host ""
     foreach ($check in $checks) {

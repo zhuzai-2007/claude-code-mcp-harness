@@ -72,7 +72,12 @@ export async function planRuntimeRetention({ dataRoot, artifactRoots = [], maxAg
     ...expiredWorkflows.map((workflow) => path.join(root, "workflows", workflow.workflowId)),
     ...expiredTasks.map((task) => path.join(root, "tasks", task.taskId)),
     ...expiredTasks.flatMap((task) => (task.attempts || []).flatMap((attempt) => artifactRoots.map((artifactRoot) => path.join(path.resolve(artifactRoot), attempt.attemptId)))),
-    ...[...expiredDecisionIds].map((decisionId) => path.join(root, "supervisor-decisions", `${decisionId}.json`))
+    ...[...expiredDecisionIds].map((decisionId) => path.join(root, "supervisor-decisions", `${decisionId}.json`)),
+    ...expiredWorkflows.flatMap((workflow) => [
+      path.join(root, "supervisor-review-packages", `${workflow.workflowId}.json`),
+      path.join(root, "memory-update-proposals", `${workflow.workflowId}.json`),
+      path.join(root, "supervisor-review-results", workflow.workflowId)
+    ])
   ];
   return {
     schemaVersion: 1,

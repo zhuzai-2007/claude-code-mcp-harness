@@ -16,6 +16,19 @@ function auditContext(audit) {
   return Object.fromEntries(["summary", "files_read", "proposed_changes", "changes_made", "commands_run", "tests_or_checks", "risks", "blocked_on", "run_result"].map((key) => [key, audit[key]]).filter(([, value]) => value != null));
 }
 
+function projectBindingFromDecision(decision) {
+  if (!decision?.project) return null;
+  const projectId = decision.projectId || decision.project.projectId || decision.project.id;
+  const workspacePath = decision.workspacePath || decision.project.workspacePath || decision.project.path;
+  if (!projectId || !workspacePath) return null;
+  return {
+    projectId,
+    name: decision.project.name || projectId,
+    workspacePath,
+    workspaceRelativePath: decision.project.path || null
+  };
+}
+
 function workflowPlanContext(workflow) {
   const plan = workflow.workflowPlan;
   if (!plan) return "";
@@ -30,6 +43,10 @@ function supervisorDecisionContext(workflow) {
     intent: decision.intent,
     goal: decision.goal,
     technical_summary: decision.technical_summary,
+    implementation_strategy: decision.implementation_strategy || "Use the Planner result to identify and execute the smallest bounded solution.",
+    expected_changes: decision.expected_changes || [],
+    validation_plan: decision.validation_plan || [],
+    acceptance_criteria: decision.validation_plan || [],
     project: decision.project,
     reasoning: decision.reasoning,
     risks: decision.risks,
@@ -40,7 +57,7 @@ function supervisorDecisionContext(workflow) {
     confidence: decision.confidence,
     constraints: decision.constraints
   };
-  return `\n\nSupervisor decision (authoritative task context):\n${JSON.stringify(context, null, 2)}\n\nTarget project boundary: '${decision.project?.path || "."}'. Start there. Do not inspect sibling projects or guess another target directory.`;
+  return `\n\nSupervisor decision (authoritative task context):\n${JSON.stringify(context, null, 2)}\n\nUse the Supervisor technical summary, implementation strategy, expected changes, constraints, and acceptance criteria to guide this stage. Validate assumptions against the registered project without silently expanding scope.\n\nTarget project boundary: '${decision.project?.path || "."}'. Start there. Do not inspect sibling projects or guess another target directory.`;
 }
 
 const PROMPT_BUILDERS = {
@@ -66,6 +83,14 @@ export class WorkflowRuntime {
   async start() {
     if (this.started) return;
     await this.store.init();
+    const workflows = await this.store.listWorkflows();
+    for (const workflow of workflows) {
+      const maxSequence = await this.store.maxEventSequence?.(workflow.workflowId) || 0;
+      if (maxSequence > Number(workflow.lastEventSequence || 0)) {
+        workflow.lastEventSequence = maxSequence;
+        await this.store.writeWorkflow(workflow);
+      }
+    }
     this.started = true;
     await this.reconcileAll();
     if (this.autoReconcile) {
@@ -76,11 +101,13 @@ export class WorkflowRuntime {
 
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
-  async createWorkflow({ userRequest, definitionId = null, supervisorDecision = null, mockWorker = false, recovery = null }) {
+  async createWorkflow({ userRequest, definitionId = null, supervisorDecision = null, session = null, mockWorker = false, recovery = null }) {
     const request = String(userRequest || "").trim();
     if (!request) throw new Error("userRequest is required");
     if (supervisorDecision && supervisorDecision.nextAction !== "create_workflow") throw new Error("Supervisor Decision is not ready to create a Workflow.");
-    if (supervisorDecision && !supervisorDecision.project?.path) throw new Error("Supervisor Decision must contain a confirmed registered project.");
+    const projectBinding = projectBindingFromDecision(supervisorDecision);
+    if (supervisorDecision && !projectBinding) throw new Error("Supervisor Decision must contain a confirmed registered projectId and workspacePath.");
+    if (session && projectBinding && session.projectId !== projectBinding.projectId) throw new Error("Project Session does not belong to the Workflow project.");
     const selectedWorkflowType = supervisorDecision?.workflowType || definitionId;
     const workflowPlan = this.workflowPlanner
       ? this.workflowPlanner.plan(request, { workflowType: selectedWorkflowType })
@@ -97,7 +124,7 @@ export class WorkflowRuntime {
     if (!definition) throw new Error(`Unknown Workflow definition: ${selectedId || "<empty>"}`);
     const createdAt = nowIso();
     const workflow = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       workflowId: `workflow_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
       userRequest: request,
       orchestrated: true,
@@ -106,6 +133,11 @@ export class WorkflowRuntime {
       workflowPlan,
       supervisorDecision: supervisorDecision ? JSON.parse(JSON.stringify(supervisorDecision)) : null,
       project: supervisorDecision?.project || null,
+      projectId: projectBinding?.projectId || null,
+      workspacePath: projectBinding?.workspacePath || null,
+      projectBinding,
+      sessionId: session?.sessionId || supervisorDecision?.session?.sessionId || null,
+      session: session ? JSON.parse(JSON.stringify(session)) : (supervisorDecision?.session ? JSON.parse(JSON.stringify(supervisorDecision.session)) : null),
       status: "created",
       currentStage: "created",
       nextAction: { type: "wait_for_orchestrator" },
@@ -137,7 +169,7 @@ export class WorkflowRuntime {
     await this.store.createWorkflow(workflow);
     await this._mutate(workflow.workflowId, (current, emit) => {
       if (current.recovery) emit("workflow.recovery_started", current.recovery);
-      if (current.supervisorDecision) emit("workflow.supervisor_decision_recorded", { decisionId: current.supervisorDecision.decisionId, schemaVersion: current.supervisorDecision.schemaVersion, intent: current.supervisorDecision.intent, workflowType: current.supervisorDecision.workflowType, project: current.supervisorDecision.project, risks: current.supervisorDecision.risks, estimatedResources: current.supervisorDecision.estimated_resources, confidence: current.supervisorDecision.confidence });
+      if (current.supervisorDecision) emit("workflow.supervisor_decision_recorded", { decisionId: current.supervisorDecision.decisionId, schemaVersion: current.supervisorDecision.schemaVersion, intent: current.supervisorDecision.intent, workflowType: current.supervisorDecision.workflowType, project: current.supervisorDecision.project, projectId: current.projectId, workspacePath: current.workspacePath, sessionId: current.sessionId, risks: current.supervisorDecision.risks, estimatedResources: current.supervisorDecision.estimated_resources, confidence: current.supervisorDecision.confidence });
       emit("workflow.planning_completed", { workflowType: current.workflowPlan.workflowType, reason: current.workflowPlan.reason, selection: current.workflowPlan.selection, stages: current.workflowPlan.stages });
       emit("workflow.created", { userRequest: current.userRequest, definitionId: current.definitionId });
     });
@@ -168,6 +200,7 @@ export class WorkflowRuntime {
       userRequest: source.userRequest,
       definitionId: source.definitionId,
       supervisorDecision: source.supervisorDecision || null,
+      session: source.session || null,
       mockWorker: source.settings?.mockWorker === true,
       recovery
     });
@@ -298,7 +331,7 @@ export class WorkflowRuntime {
         }
 
         const prompt = await this._buildStagePrompt(workflow, stage);
-        let task = await this.taskRuntime.createTask({ prompt, mode: stage.mode, resourceProfile: stage.resourceProfile, workflowId, role: stage.role, mockWorker: workflow.settings?.mockWorker === true });
+        let task = await this.taskRuntime.createTask({ prompt, mode: stage.mode, resourceProfile: stage.resourceProfile, workflowId, role: stage.role, projectContext: workflow.projectBinding || null, sessionId: workflow.sessionId || null, mockWorker: workflow.settings?.mockWorker === true });
         stage.taskId = task.taskId;
         stage.startedAt = task.createdAt;
         stage.status = task.status === "waiting_approval" ? "waiting_approval" : "running";
@@ -329,7 +362,7 @@ export class WorkflowRuntime {
     if (existing.orchestrated) throw new Error("Orchestrated Workflow creates stage Tasks automatically.");
     const mode = WORKFLOW_ROLE_MODES[options.role];
     if (!mode) throw new Error(`Unsupported workflow role: ${options.role}`);
-    const task = await this.taskRuntime.createTask({ ...options, mode, workflowId, role: options.role });
+    const task = await this.taskRuntime.createTask({ ...options, mode, workflowId, role: options.role, projectContext: existing.projectBinding || options.projectContext || null, sessionId: existing.sessionId || options.sessionId || null });
     await this._mutate(workflowId, (workflow, emit) => {
       workflow.tasks.push({ taskId: task.taskId, role: options.role, mode, status: task.status, addedAt: nowIso() });
       emit("workflow.task_added", { taskId: task.taskId, role: options.role, mode });
@@ -358,6 +391,12 @@ export class WorkflowRuntime {
     return workflow.orchestrated ? this.reconcileWorkflow(workflowId) : this._withLock(workflowId, async () => this._persistLegacySnapshot(await this.store.readWorkflow(workflowId)));
   }
 
+  async inspectWorkflow(workflowId) {
+    const workflow = await this.store.readWorkflow(workflowId);
+    if (!workflow) return null;
+    return workflow.orchestrated ? this._decorateOrchestrated(workflow) : { ...workflow };
+  }
+
   async listWorkflows({ status = null, limit = 50 } = {}) {
     const workflows = await this.store.listWorkflows();
     const snapshots = [];
@@ -366,19 +405,48 @@ export class WorkflowRuntime {
   }
 
   async getWorkflowEvents(workflowId, { afterSequence = 0, limit = 500 } = {}) {
-    const workflow = await this.store.readWorkflow(workflowId);
-    if (!workflow) return null;
-    const ownEvents = (await this.store.readEvents(workflowId)) || [];
-    const taskEvents = [];
-    for (const ref of workflow.tasks || []) {
-      const result = await this.taskRuntime.getTaskEvents(ref.taskId, { afterSequence: 0, limit: 500 });
-      for (const event of result?.events || []) taskEvents.push({ ...event, workflowId, role: ref.role, mode: ref.mode, stageId: ref.stageId || null, source: event.source || "task_runtime" });
-    }
-    const merged = [...ownEvents, ...taskEvents].sort((left, right) => String(left.timestamp).localeCompare(String(right.timestamp)) || String(left.eventId || left.taskId).localeCompare(String(right.eventId || right.taskId))).map((event, index) => ({ ...event, sequence: index + 1 }));
-    const cursor = Math.max(0, Number(afterSequence) || 0);
-    const page = merged.filter((event) => event.sequence > cursor).slice(0, Math.max(1, Math.min(1000, Number(limit) || 500)));
-    const lastSequence = page.length ? page.at(-1).sequence : cursor;
-    return { workflowId, afterSequence: cursor, lastSequence, hasMore: lastSequence < merged.length, events: page };
+    return this._withLock(workflowId, async () => {
+      const workflow = await this.store.readWorkflow(workflowId);
+      if (!workflow) return null;
+      const ownEvents = ((await this.store.readEvents(workflowId)) || []).map((event) => ({ ...event, source: event.source || "workflow_runtime" }));
+      const taskEvents = [];
+      for (const ref of workflow.tasks || []) {
+        let taskCursor = 0;
+        while (true) {
+          const result = await this.taskRuntime.getTaskEvents(ref.taskId, { afterSequence: taskCursor, limit: 500 });
+          for (const event of result?.events || []) taskEvents.push({ ...event, workflowId, role: ref.role, mode: ref.mode, stageId: ref.stageId || null, source: event.source || "task_runtime", taskId: event.taskId || ref.taskId });
+          if (!result?.hasMore || !result.events?.length) break;
+          taskCursor = result.lastSequence;
+        }
+      }
+
+      const sourceKey = (event) => event.source === "workflow_runtime"
+        ? `workflow:${event.eventId || event.sequence}`
+        : `task:${event.taskId}:${event.eventId || event.sequence}`;
+      const discovered = [...ownEvents, ...taskEvents].sort((left, right) =>
+        String(left.timestamp).localeCompare(String(right.timestamp)) || sourceKey(left).localeCompare(sourceKey(right))
+      );
+      const eventIndex = (await this.store.readEventIndex?.(workflowId)) || { schemaVersion: 1, workflowId, lastSequence: 0, sources: {} };
+      eventIndex.sources ||= {};
+      eventIndex.lastSequence = Math.max(Number(eventIndex.lastSequence || 0), ...Object.values(eventIndex.sources).map((value) => Number(value) || 0));
+      let changed = false;
+      for (const event of discovered) {
+        const key = sourceKey(event);
+        if (eventIndex.sources[key]) continue;
+        eventIndex.lastSequence += 1;
+        eventIndex.sources[key] = eventIndex.lastSequence;
+        changed = true;
+      }
+      if (changed) await this.store.writeEventIndex?.(workflowId, eventIndex);
+
+      const merged = discovered
+        .map((event) => ({ ...event, sourceSequence: event.sequence, sequence: eventIndex.sources[sourceKey(event)] }))
+        .sort((left, right) => left.sequence - right.sequence);
+      const cursor = Math.max(0, Number(afterSequence) || 0);
+      const page = merged.filter((event) => event.sequence > cursor).slice(0, Math.max(1, Math.min(1000, Number(limit) || 500)));
+      const lastSequence = page.length ? page.at(-1).sequence : cursor;
+      return { workflowId, afterSequence: cursor, lastSequence, hasMore: merged.some((event) => event.sequence > lastSequence), events: page };
+    });
   }
 
   async _buildStagePrompt(workflow, stage) {

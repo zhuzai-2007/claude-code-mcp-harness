@@ -39,6 +39,7 @@ export class FileWorkflowStore {
 
   workflowPath(workflowId) { return path.join(this.workflowDirectory(workflowId), "workflow.json"); }
   eventsPath(workflowId) { return path.join(this.workflowDirectory(workflowId), "events.jsonl"); }
+  eventIndexPath(workflowId) { return path.join(this.workflowDirectory(workflowId), "event-index.json"); }
 
   async createWorkflow(workflow) {
     await mkdir(this.workflowDirectory(workflow.workflowId), { recursive: false });
@@ -59,6 +60,22 @@ export class FileWorkflowStore {
     try { text = await readFile(this.eventsPath(workflowId), "utf8"); }
     catch (error) { if (error?.code === "ENOENT") return null; throw error; }
     return text.split(/\r?\n/).filter((line) => line.trim()).map((line) => JSON.parse(line));
+  }
+
+  async maxEventSequence(workflowId) {
+    const events = await this.readEvents(workflowId);
+    if (!events?.length) return 0;
+    return Math.max(...events.map((event) => Number(event.sequence) || 0));
+  }
+
+  async readEventIndex(workflowId) {
+    try { return JSON.parse(await readFile(this.eventIndexPath(workflowId), "utf8")); }
+    catch (error) { if (error?.code === "ENOENT") return null; throw error; }
+  }
+
+  async writeEventIndex(workflowId, eventIndex) {
+    assertWorkflowId(workflowId);
+    await writeJsonAtomic(this.eventIndexPath(workflowId), eventIndex);
   }
 
   async listWorkflows() {

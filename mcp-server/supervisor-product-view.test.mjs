@@ -13,7 +13,11 @@ const workflow = {
   approvals: {},
   rejections: {},
   failure: null,
-  supervisorDecision: { decisionId: "decision_product_test", intent: "code_change", goal: "Add JSON export", technical_summary: "Add a bounded export control without changing storage semantics.", project: { id: "board", name: "Task Board", path: "workspace/board", techStack: ["Browser JavaScript"], defaultConstraints: ["No dependencies."] }, reasoning: ["A bounded code change is required."], risks: ["Downloaded JSON may contain user task text."], workflowType: "software_change", estimated_resources: { basis: "gpt_estimate_with_runtime_caps", complexity: "low", expected: { budgetUsd: 0.5, turns: 20, filesRead: 8, commands: 0, timeoutSeconds: 300 }, hard_caps: { budgetUsd: 4, turns: 150, filesRead: 200, commands: 50, timeoutSeconds: 1800 }, stages: [], within_hard_caps: true, notes: ["Advisory only."] }, recommended_actions: ["Plan, approve, implement, and review."], agentRequired: true, confidence: 0.91, nextAction: "create_workflow", source: "gpt" }
+  projectId: "board",
+  workspacePath: "D:/registered/workspace/board",
+  sessionId: "session_product_test",
+  session: { sessionId: "session_product_test", projectId: "board", name: "JSON export" },
+  supervisorDecision: { decisionId: "decision_product_test", intent: "code_change", goal: "Add JSON export", goalConfidence: 0.72, possibleIntentMismatch: "The request may require a migration rather than a download.", clarificationNeeded: true, clarificationReasons: ["possible_intent_mismatch"], technical_summary: "Add a bounded export control without changing storage semantics.", implementation_strategy: "Reuse the existing browser action pattern.", expected_changes: ["Add one export action."], validation_plan: ["Verify JSON download and existing storage behavior."], supervisor_context: { projectId: "board", file: "AI_SUPERVISOR.md", digest: "fixture" }, project: { id: "board", name: "Task Board", path: "workspace/board", techStack: ["Browser JavaScript"], defaultConstraints: ["No dependencies."] }, reasoning: ["A bounded code change is required."], risks: ["Downloaded JSON may contain user task text."], workflowType: "software_change", estimated_resources: { basis: "gpt_estimate_with_runtime_caps", complexity: "low", expected: { budgetUsd: 0.5, turns: 20, filesRead: 8, commands: 0, timeoutSeconds: 300 }, hard_caps: { budgetUsd: 4, turns: 150, filesRead: 200, commands: 50, timeoutSeconds: 1800 }, stages: [], within_hard_caps: true, notes: ["Advisory only."] }, recommended_actions: ["Plan, approve, implement, and review."], agentRequired: true, confidence: 0.91, nextAction: "create_workflow", source: "gpt" }
 };
 const tasks = [{
   role: "planner",
@@ -32,7 +36,17 @@ assert.deepEqual(product.risks, ["Downloaded JSON may contain user task text.", 
 assert.equal(product.totalCostUsd, 0.2);
 assert.equal(product.totalUsage.turns, 8);
 assert.equal(product.supervisorDecision.decisionId, "decision_product_test");
+assert.equal(product.supervisorDecision.goalConfidence, 0.72);
+assert.equal(product.supervisorDecision.clarificationNeeded, true);
+assert.match(product.supervisorDecision.possibleIntentMismatch, /migration/);
+assert.equal(product.projectId, "board");
+assert.equal(product.workspacePath, "D:/registered/workspace/board");
+assert.equal(product.sessionId, "session_product_test");
 assert.equal(product.supervisorDecision.technicalSummary, "Add a bounded export control without changing storage semantics.");
+assert.equal(product.supervisorDecision.implementationStrategy, "Reuse the existing browser action pattern.");
+assert.deepEqual(product.supervisorDecision.expectedChanges, ["Add one export action."]);
+assert.deepEqual(product.supervisorDecision.validationPlan, ["Verify JSON download and existing storage behavior."]);
+assert.equal(product.supervisorDecision.supervisorContext.file, "AI_SUPERVISOR.md");
 assert.deepEqual(product.supervisorDecision.risks, ["Downloaded JSON may contain user task text."]);
 assert.equal(product.supervisorDecision.estimatedResources.expected.turns, 20);
 assert(product.risks.includes("Downloaded JSON may contain user task text."));

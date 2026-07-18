@@ -1,8 +1,8 @@
-# Supervisor v1.0 Beta
+# Supervisor v1.8 Beta
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Supervisor is a local, human-controlled development runtime for connecting ChatGPT Web to a bounded Claude Code worker. It turns one natural-language request into a durable workflow:
+Supervisor is a **local governance layer that gives coding agents approval, audit, project continuity, and human control**. ChatGPT Web acts as project Supervisor while a bounded Claude Code Worker performs local execution. It turns one natural-language request into a durable workflow:
 
 ```text
 User request
@@ -18,6 +18,49 @@ The project does not build a new model or a general Agent platform. It reuses AI
 
 > **Beta means invite-only testing, not production isolation.** Supervisor provides policy, approval, resource, side-effect, and audit guardrails. It is not an operating-system sandbox. Use a restricted account, VM, or container for untrusted code.
 
+## Five-minute quick start
+
+Requirements: Windows PowerShell, Node.js 20+, Claude Code CLI with a configured provider, and access to ChatGPT Web with an MCP-capable connection.
+
+1. **Install dependencies.** Clone the repository, open PowerShell in its root, and run:
+
+   ```powershell
+   .\install.ps1
+   ```
+
+2. **Check and start the local Runtime.**
+
+   ```powershell
+   .\scripts\doctor.ps1
+   .\start.ps1
+   ```
+
+   The Dashboard URL is printed by `start.ps1`, normally `http://127.0.0.1:8787/supervisor/`.
+
+3. **Configure and start the tunnel.** Initialize the official OpenAI Secure MCP Tunnel once, then start it using local secrets that remain untracked:
+
+   ```powershell
+   .\scripts\start-openai-tunnel.ps1 -Initialize -TunnelId "<tunnel-id>"
+   .\scripts\start-openai-tunnel.ps1
+   ```
+
+   Some command-line network environments require `HTTP_PROXY` and `HTTPS_PROXY`; see [Network and proxy configuration](#network-and-proxy-configuration). Never commit the tunnel profile, API key, proxy address, or public endpoint.
+
+4. **Connect ChatGPT.** Add the tunnel endpoint as an MCP connection in ChatGPT Web. Ask ChatGPT Supervisor to call `cc_list_projects`, `cc_get_project_continuity`, and `cc_list_workflow_definitions` before creating work.
+
+5. **Run the first task.** Against a registered demo Project, enter only:
+
+   > Add CSV export to the demo task board.
+
+   The expected path is:
+
+   ```text
+   Supervisor Decision -> Planner -> Human Approval -> Claude Code change
+   -> Harness Audit -> Claude Reviewer -> ChatGPT Supervisor Review
+   ```
+
+The Dashboard is the control console for state, evidence, and approval; it is not a replacement for ChatGPT reasoning. See [Using Supervisor from ChatGPT Web](docs/gpt-web-usage.md) for the exact first-session sequence and non-automated release validation.
+
 ## What you get
 
 - A local Supervisor Console for creating and following development requests.
@@ -29,18 +72,24 @@ The project does not build a new model or a general Agent platform. It reuses AI
 - Strict cross-validation between Worker JSON claims and observed Claude Code tool events.
 - A fixed MCP surface for ChatGPT Web through OpenAI Secure MCP Tunnel.
 - A persistent Supervisor Decision that records intent, goal, project, reasoning, Workflow type, confidence, and next action before a Workflow exists.
-- A registered Project Context layer that selects a unique target or pauses for explicit project confirmation.
+- A registered Project Context layer that owns `projectId`/`workspacePath`, exposes GPT-only `AI_SUPERVISOR.md` and `PROJECT_MEMORY.md`, or pauses for explicit project confirmation.
+- Project Sessions that associate multiple Workflows with one Project without storing ChatGPT conversation history.
 - An Approval Center with decision context, bounded cost estimate, observed file scope, and tool-evidence diffs.
 - An isolated Provider Preflight that sends a fixed non-project probe with no tools or session persistence.
 - Safe recovery for failed Workflows: new history, a new Planner, and a new approval boundary.
 - Plain-language failed-stage classification and recovery guidance in the Dashboard.
 - A repeatable isolated Demo and recorded real-provider, full-Workflow, Dashboard, desktop, and mobile acceptance.
+- A terminal Workflow handoff back to ChatGPT Web, with an evidence-first Review Package and a confirmation-required Project Memory update proposal.
+- A Project Intelligence layer that persists explicitly confirmed GPT reviews and applies stored Memory proposals only through a traced human-confirmation flow.
+- A Project Continuity layer with evidence-derived Project Briefs, cross-Workflow Supervisor Sessions, a project-first Dashboard, and a compact read-only GPT context tool.
 
 ## Supervisor Brain
 
-ChatGPT can attach a structured `supervisorDecision` to `cc_create_workflow`. v1.0-beta preserves the existing Decision contract: intent, technical goal, registered project, concise reasoning, risks, expected resources, recommended Workflow/actions, confidence, whether a Worker is needed, and the next action. The local Console uses the same Decision Layer with deterministic, explainable fallback rules when no model is present. Every Decision is persisted under `runtime-data/supervisor-decisions/` before it can reach the Workflow Runtime.
+ChatGPT can attach a structured `supervisorDecision` to `cc_create_workflow`. The Decision records intent, technical goal, registered project, concise reasoning, risks, expected resources, recommended Workflow/actions, confidence, whether a Worker is needed, and the next action. v1.2 also records `technical_summary`, `implementation_strategy`, `expected_changes`, and `validation_plan` so GPT owns the technical direction instead of forwarding a one-line request. The local Console uses the same Decision Layer with deterministic, explainable fallback rules when no model is present. Every Decision is persisted under `runtime-data/supervisor-decisions/` before it can reach the Workflow Runtime.
 
-Projects are registered in `.agents/projects.json` with a stable ID, relative path, description, language, aliases, and runtime-derived `lastUsed`. A unique request match is selected automatically. If several projects remain plausible, Supervisor returns `project_confirmation_required`; no Workflow or Worker starts until the user confirms one of the registered candidates.
+Projects are registered in `.agents/projects.json` with `projectId`, relative `workspacePath`, description, stack, aliases, constraints, and runtime-derived `lastUsed`. A project root may contain GPT-only `AI_SUPERVISOR.md` and `PROJECT_MEMORY.md`. GPT must pass the exact registered `projectId`; a GPT-authored Workflow request without it is rejected. If several projects remain plausible, Supervisor returns `project_confirmation_required`; no Workflow or Worker starts until the user confirms one candidate.
+
+Before `cc_create_workflow`, ChatGPT Supervisor calls `cc_list_projects`, `cc_get_project_context`, and `cc_list_workflow_definitions`. Project context returns the Registry workspace, instructions, Project Memory, and Sessions. ChatGPT may reuse a Session returned for that same Project. Unknown projects, cross-project Session reuse, missing GPT `projectId`, and unknown Workflow IDs are rejected locally. If the goal itself remains ambiguous, risky, or low-confidence, the Decision enters `waiting_for_clarification`; an explicit answer regenerates a new linked Decision before any Workflow can exist.
 
 The boundary is intentionally explicit:
 
@@ -48,7 +97,7 @@ The boundary is intentionally explicit:
 Supervisor Decision -> Project Context -> Workflow Planner -> Workflow Runtime -> Task Runtime
 ```
 
-The expected GPT behavior is: decide whether a Worker is needed, query/select a registered project, produce the full Decision, and only then enter a Workflow. Explanations use `respond_directly`; project analysis uses `analysis_only`; code changes use `software_change`. Intent/Workflow mismatches and target guessing are rejected locally. The Decision Layer never creates a Task and cannot bypass Workflow approval. See [Supervisor Brain](docs/supervisor-brain.md).
+The expected GPT behavior is: understand the real goal, decide whether a Worker is needed, query/select a registered project, read its Supervisor Context, define the technical direction and validation plan, discover a legal Workflow, and only then create it. Explanations use `respond_directly`; project analysis uses `analysis_only`; code changes use `software_change`. Intent/Workflow mismatches and target guessing are rejected locally. The Decision Layer never creates a Task and cannot bypass Workflow approval. See [Supervisor Brain](docs/supervisor-brain.md).
 
 ## Quick start on Windows
 
@@ -68,6 +117,8 @@ Clone the repository, then run:
 
 Those three commands are sufficient to start the local Dashboard. Before the first real Worker task, optionally verify external model connectivity with the isolated, potentially billable probe:
 
+If `node` is not currently on `PATH` but Doctor finds an existing nvm installation, the required Node check still fails. Its output now lists the nvm path and installed versions and recommends `nvm use <version>` instead of suggesting a duplicate Node installation.
+
 ```powershell
 .\scripts\doctor.ps1 -ProviderPreflight
 ```
@@ -84,7 +135,9 @@ Enter a request such as:
 给任务看板增加导出 JSON 功能
 ```
 
-Supervisor starts with a persisted Decision and read-only planning. The console shows Decision → Planning → Approval → Execution → Review, including technical summary, project stack/default constraints, proposed scope, combined risks, expected resources, Resource Profile hard caps, and estimated impact. Review that information, enter your name and decision reason, then explicitly Approve or Reject. Approval metadata is audit context, not identity verification.
+Supervisor starts with a persisted Decision and read-only planning. The compact Workflow header switches between the Workflow summary and stage timeline instead of displaying both. The timeline navigates one relevant page at a time: Decision/Plan, Approval, Implementation, or Review. Completed and current stages are viewable; future stages remain disabled. Overall status is collapsed by default, and the independently sticky Recent Work rail can be hidden or restored. Review the bounded plan, enter your name and decision reason, then explicitly Approve or Reject. Approval metadata is audit context, not identity verification.
+
+The Dashboard follows the browser language by default and can be switched between Chinese and English. Recent Work is grouped by date; display names and archive state are stored separately under ignored `runtime-data/supervisor-workflow-metadata/`, without rewriting Workflow snapshots or events. ChatGPT Supervisor remains the primary request entry. The Dashboard's **Local fallback entry** is retained as a collapsed, rule-based backup.
 
 Before first use, review `.agents/projects.json`. Keep paths relative to `projectRoot`; register only directories the Supervisor should be allowed to target. When the Console asks for project confirmation, choosing a project still starts only the read-only Planner.
 
@@ -105,6 +158,10 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 ## v1.0-beta release preparation
 
 v1.0-beta is a release-convergence milestone, not a Runtime redesign. It keeps the v0.9 Decision, Workflow, Task, approval, resource, and audit boundaries intact while tightening first-run guidance, version checks, release artifact visibility, and repeatable Todo acceptance. See [v1.0-beta release audit](docs/v1.0-beta-release-audit.md).
+
+## v1.8 Beta release candidate
+
+v1.8 consolidates the Decision, Project Context, Project Intelligence, Human-GPT Collaboration, and Project Continuity layers into a public-Beta candidate. It adds deterministic Project Health and explicit release-readiness metadata; it does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [Changelog](CHANGELOG.md) and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The candidate remains `pending_gpt_web_validation` until that manual fresh-session check is recorded.
 
 ## Architecture
 
@@ -133,15 +190,24 @@ ChatGPT Web / Supervisor Console
 | Layer | Responsibility |
 | --- | --- |
 | Supervisor Console | User request entry, recent work, approvals, results, and explainable safety status. |
-| Supervisor Decision | Persist intent, goal, target project, reasoning, confidence, constraints, and next action. It cannot create Tasks. |
-| Project Context | Resolve only registered project paths; stop for confirmation when selection is ambiguous. |
+| Supervisor Decision | Persist intent, goal, target project, technical direction, expected changes, validation plan, confidence, constraints, and next action. It cannot create Tasks. |
+| Project Context | Own registered `projectId` and `workspacePath`; expose bounded GPT-only instructions and Project Memory; stop on ambiguity. |
+| Project Session | Associate Workflow history with one Project using file-backed metadata; never store ChatGPT messages. |
 | Workflow Planner | Select a data-driven Workflow Definition and record goal, reason, constraints, and stages. |
 | Workflow Orchestrator | Advance stages and create one Task at a time. It cannot synthesize approval. |
 | Task Runtime | Persist Task/Attempt lifecycle, heartbeat, events, cancellation, and restart recovery. |
 | Harness | Enforce project root, tools, approval metadata, resources, side effects, and audit contracts. |
 | Worker | Perform bounded reads and approved local edits through Claude Code. |
 
-The existing MCP tools remain compatible. The product console uses local Bridge product APIs that call the same Workflow Runtime and approval boundary; it never calls the Worker or Harness directly.
+The existing MCP tools remain compatible. v1.2 adds the read-only `cc_get_project_context` and `cc_list_workflow_definitions` discovery tools without changing existing tool inputs or behavior. v1.7 adds only the read-only `cc_get_project_continuity` context tool; it returns a Project Brief, bounded Memory summary, Sessions, recent Workflows, and open issues without raw event history. The product console uses local Bridge product APIs that call the same Workflow Runtime and approval boundary; it never calls the Worker or Harness directly.
+
+v1.4 adds the read-only `cc_get_supervisor_review_package` projection. It persists the original request, Decision-time Memory snapshot, implementation evidence, and Reviewer result so ChatGPT Web can assess a completed or failed Workflow without re-running an Agent. The legacy `cc_run_approved_task` remains a standalone compatibility tool; it does not approve a Workflow. Use `cc_approve_workflow` at a Workflow human checkpoint.
+
+v1.5 adds a compact **Review in ChatGPT** handoff on completed and failed Workflow pages. The Dashboard only provides the Workflow/Project ids, existing Review Package tool call, and a suggested prompt; it never calls a GPT API. Supervisor judgment fields remain empty until an explicitly confirmed result is submitted.
+
+v1.6 adds the Project Intelligence layer. `cc_record_supervisor_review_result` stores an explicit ChatGPT Supervisor conclusion without changing Workflow state. A pending evidence-first proposal can be applied through `cc_apply_memory_update_proposal` or the local Dashboard only after named confirmation; Runtime appends it to `Recent Evolution`, preserves existing Memory, records before/after digests, and never runs a Worker. See [Architecture](docs/ARCHITECTURE.md) and [Project Memory layers](docs/project-memory.md).
+
+v1.7 adds Project Continuity. The Dashboard lands on a Project Overview with Brief, Memory, Sessions, recent Workflows, and open issues. Artifact Center is a read-only projection of existing Workflow artifacts. Project Brief recommendations remain empty unless they come from a saved, explicitly confirmed GPT Supervisor Review; Worker claims and unconfirmed Session context never become synthetic project direction.
 
 ## Workflow types
 
@@ -190,6 +256,8 @@ Public, versioned configuration:
 - `.agents/resource-profiles.json` — resource envelopes and global hard limits;
 - `.agents/workflow-definitions.json` — Workflow selection metadata and stages;
 - `.agents/projects.json` — registered relative project paths and selection aliases;
+- `AI_SUPERVISOR.md` — optional GPT-only project instructions; its raw contents are never copied into a Worker prompt;
+- `PROJECT_MEMORY.md` — optional GPT-only project goals, decisions, completed work, known issues, and next steps;
 - `mcp-server/config.example.json` — placeholder-only Bridge template.
 
 Machine-local, ignored configuration:
@@ -234,6 +302,7 @@ Safe local checks that do not require a paid Worker call:
 node .\runtime\workflow-planner.test.mjs
 node .\runtime\workflow-runtime.test.mjs
 node .\runtime\supervisor-brain.test.mjs
+node .\runtime\project-continuity.test.mjs
 node .\runtime\runtime-retention.test.mjs
 node .\runtime\harness-runner.test.mjs
 node .\runtime\provider-preflight.test.mjs
@@ -242,6 +311,8 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 node .\workspace\release-beta-todo-demo\demo.test.mjs
 node .\mcp-server\supervisor-dashboard-routes.test.mjs
 node .\mcp-server\supervisor-product-view.test.mjs
+node .\workspace\supervisor-dashboard\dashboard-ui.test.mjs
+.\scripts\doctor-nvm.test.ps1
 ```
 
 Use real Worker tests only after checking provider cost and reviewing the exact project boundary.

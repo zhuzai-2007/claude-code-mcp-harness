@@ -1,8 +1,8 @@
-# Supervisor v1.0 Beta
+# Supervisor v1.8 Beta
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Supervisor 是一个本地运行、由人控制的开发任务系统，用来把 ChatGPT 网页端连接到受约束的 Claude Code Worker。用户只需要输入自然语言需求，系统会形成一条可持久化、可审批、可审计的工作流：
+Supervisor 是一个**为编码 Agent 提供审批、审计、项目连续性和人工控制的本地治理层**。ChatGPT Web 担任项目负责人，受边界约束的 Claude Code Worker 负责本地执行。用户只需输入自然语言需求，系统就会形成可持久化、可审批、可审计的工作流：
 
 ```text
 用户需求
@@ -18,6 +18,49 @@ Supervisor 是一个本地运行、由人控制的开发任务系统，用来把
 
 > **Beta 表示邀请试用，不代表生产级隔离。** Supervisor 提供策略、审批、资源、side-effect 和审计 guardrail，但不是操作系统沙箱。处理不可信代码时仍应使用受限账户、虚拟机或容器。
 
+## 五分钟快速开始
+
+要求：Windows PowerShell、Node.js 20 或更高版本、已配置 Provider 的 Claude Code CLI，以及支持 MCP 连接的 ChatGPT Web。
+
+1. **安装依赖。** 克隆仓库，在仓库根目录打开 PowerShell：
+
+   ```powershell
+   .\install.ps1
+   ```
+
+2. **检查并启动本地 Runtime。**
+
+   ```powershell
+   .\scripts\doctor.ps1
+   .\start.ps1
+   ```
+
+   `start.ps1` 会打印 Dashboard 地址，通常是 `http://127.0.0.1:8787/supervisor/`。
+
+3. **配置并启动 Tunnel。** 首次初始化官方 OpenAI Secure MCP Tunnel，之后使用保留在本地且不受 Git 跟踪的配置启动：
+
+   ```powershell
+   .\scripts\start-openai-tunnel.ps1 -Initialize -TunnelId "<tunnel-id>"
+   .\scripts\start-openai-tunnel.ps1
+   ```
+
+   某些命令行网络环境需要设置 `HTTP_PROXY` 与 `HTTPS_PROXY`；参见[网络与代理配置](#网络与代理配置)。不要提交 Tunnel Profile、API Key、代理地址或公网端点。
+
+4. **连接 ChatGPT。** 在 ChatGPT Web 中把 Tunnel 端点添加为 MCP 连接。要求 ChatGPT Supervisor 在创建任务前调用 `cc_list_projects`、`cc_get_project_continuity` 和 `cc_list_workflow_definitions`。
+
+5. **运行第一个任务。** 对已注册的 Demo Project，只输入：
+
+   > 给演示任务看板增加 CSV 导出功能。
+
+   预期流程：
+
+   ```text
+   Supervisor Decision -> Planner -> Human Approval -> Claude Code change
+   -> Harness Audit -> Claude Reviewer -> ChatGPT Supervisor Review
+   ```
+
+Dashboard 是查看状态、证据和执行审批的控制台，不替代 ChatGPT 的负责人判断。完整的新会话步骤与非自动发布验收见 [ChatGPT Web 使用指南](docs/gpt-web-usage.md)。
+
 ## 主要能力
 
 - 在本地 Supervisor Console 中创建和观察开发任务；
@@ -29,24 +72,30 @@ Supervisor 是一个本地运行、由人控制的开发任务系统，用来把
 - 将 Worker JSON 自报与 Claude Code 真实工具事件交叉验证；
 - 通过 OpenAI Secure MCP Tunnel 向 ChatGPT Web 暴露固定 MCP 工具。
 - 在 Workflow 创建前持久化 Supervisor Decision，记录意图、目标、项目、判断依据、流程类型、置信度和下一步动作；
-- 通过 `.agents/projects.json` 注册项目：唯一候选自动选择，多候选时先要求用户确认；
+- 通过 `.agents/projects.json` 管理 `projectId/workspacePath`，并用项目根目录的 `AI_SUPERVISOR.md` 与 `PROJECT_MEMORY.md` 向 GPT 提供项目上下文；
+- 用 Project Session 把同一项目的多个 Workflow 关联起来，但不保存 ChatGPT 聊天内容；
 - 在审批中心展示决策上下文、资源上限、规则成本估算，以及来自真实 Write/Edit 工具事件的 Diff。
 - 使用固定非项目 prompt、空临时目录、禁用工具和会话持久化来执行 Provider Preflight；
 - failed Workflow 可以创建全新恢复 Workflow，重新规划且不复用旧审批；
 - Dashboard 会显示失败阶段、用户可理解的错误分类和恢复建议。
 - 提供可重复的隔离 Demo，并记录真实 Provider、完整 Workflow、Dashboard、桌面端和移动端验收结果。
+- 在 Workflow 终态提供回到 ChatGPT Web 的交接入口，并生成基于证据、必须确认的 Project Memory 更新建议。
+- 通过 Project Intelligence 层保存明确确认的 GPT Review，并且只在人工确认后受控应用已存储的 Memory Proposal。
+- 通过 Project Continuity 层生成基于事实的 Project Brief、跨 Workflow 的 Supervisor Session、项目优先 Dashboard 和精简只读 GPT 上下文。
 
 ## Supervisor Brain
 
-ChatGPT 可以在 `cc_create_workflow` 调用中附带结构化 `supervisorDecision`。v1.0-beta 保持既有 Decision 契约：记录用户意图、技术目标、注册项目、简洁判断依据、风险、预计资源、推荐 Workflow/动作、置信度、是否需要 Worker 和下一步动作。本地 Dashboard 没有模型进程，因此使用确定性、可解释的规则作为回退；两条入口都经过同一套项目注册、Decision 持久化和 Workflow 校验。
+ChatGPT 可以在 `cc_create_workflow` 调用中附带结构化 `supervisorDecision`。Decision 记录用户意图、技术目标、注册项目、简洁判断依据、风险、预计资源、推荐 Workflow/动作、置信度、是否需要 Worker 和下一步动作。v1.2 进一步记录 `technical_summary`、`implementation_strategy`、`expected_changes` 和 `validation_plan`，使 GPT 负责技术方向，而不是只转发一句需求。本地 Dashboard 没有模型进程，因此使用确定性、可解释的规则作为回退；两条入口都经过同一套项目注册、Decision 持久化和 Workflow 校验。
 
 Decision 会先写入 `runtime-data/supervisor-decisions/`。只有目标项目已经唯一确定，且 `nextAction=create_workflow` 时，才会交给 Workflow Runtime。项目有歧义时返回 `project_confirmation_required`，不会创建 Workflow，更不会启动 Worker。
+
+调用 `cc_create_workflow` 前，ChatGPT Supervisor 必须依次调用 `cc_list_projects`、`cc_get_project_context` 和 `cc_list_workflow_definitions`。项目上下文返回 Registry 工作区、GPT-only instructions、Project Memory 和已有 Session。GPT 创建 Workflow 时必须显式传入注册的 `projectId`，也可以复用同项目的 `sessionId`；缺少项目、跨项目复用 Session 或未知 Workflow 都会被本地拒绝。若目标仍然模糊、高风险或置信度不足，Decision 会进入 `waiting_for_clarification`，不会创建 Workflow；用户明确回答后才会重新生成一个关联的新 Decision。
 
 ```text
 Supervisor Decision -> Project Context -> Workflow Planner -> Workflow Runtime -> Task Runtime
 ```
 
-GPT 的行为顺序是：先判断是否需要 Worker，再查询和选择注册项目，生成完整 Decision，最后进入 Workflow。解释类请求使用 `respond_directly`，项目分析使用 `analysis_only`，代码修改使用 `software_change`。本地会拒绝 Intent/Workflow 不一致和让 Worker 猜目录的请求。Decision Layer 不直接创建 Task，不生成审批，也不能绕过既有安全边界。详细设计见 [Supervisor Brain](docs/supervisor-brain.md)。
+GPT 的行为顺序是：理解真实目标，判断是否需要 Worker，查询并确认注册项目，读取 Supervisor Context，制定技术方向和验证计划，查询合法 Workflow，最后创建 Workflow。解释类请求使用 `respond_directly`，项目分析使用 `analysis_only`，代码修改使用 `software_change`。本地会拒绝 Intent/Workflow 不一致和让 Worker 猜目录的请求。Decision Layer 不直接创建 Task，不生成审批，也不能绕过既有安全边界。详细设计见 [Supervisor Brain](docs/supervisor-brain.md)。
 
 ## Windows 快速开始
 
@@ -66,6 +115,8 @@ Clone 仓库后执行：
 
 以上三条命令即可启动本地 Dashboard。第一次执行真实 Worker 任务前，可按需运行隔离的外部模型连通性检查；该探针可能产生最低单次费用：
 
+如果 `node` 当前不在 `PATH`，但 Doctor 发现已有 nvm 安装，必需的 Node 检查仍会失败；输出会列出 nvm 路径和已安装版本，并建议执行 `nvm use <version>`，不会误导用户重复安装 Node。
+
 ```powershell
 .\scripts\doctor.ps1 -ProviderPreflight
 ```
@@ -82,7 +133,9 @@ http://127.0.0.1:8787/supervisor/
 给任务看板增加导出 JSON 功能
 ```
 
-Supervisor 会先持久化 Decision，再进行只读规划。控制台按 Decision → Planning → Approval → Execution → Review 展示完整生命周期，并显示技术摘要、项目技术栈和默认约束、建议范围、综合风险、预计资源、Resource Profile 硬上限和预计影响。检查这些信息后，填写审批人和决策理由，再明确选择 Approve 或 Reject。审批信息属于本地审计元数据，不等同于身份认证。
+Supervisor 会先持久化 Decision，再进行只读规划。紧凑的 Workflow 顶栏在 Workflow 摘要与阶段时间线之间切换，不再同时占用高度。时间线按需只显示 Decision/Plan、Approval、Implementation 或 Review 页面；已完成和当前阶段可查看，未来阶段不可点击。整体状态默认折叠，独立固定的 Recent Work 栏可以收起和恢复。检查有边界的计划后，填写审批人和决策理由，再明确选择 Approve 或 Reject。审批信息属于本地审计元数据，不等同于身份认证。
+
+Dashboard 默认跟随浏览器语言，也可手动切换中文/English。Recent Work 按日期分组；显示名称和归档状态单独保存在已忽略的 `runtime-data/supervisor-workflow-metadata/`，不会重写 Workflow 快照或事件。ChatGPT Supervisor 仍是主要请求入口，Dashboard 的 **备用本地入口** 默认折叠，仅作为本地规则模式备用。
 
 首次使用前请检查 `.agents/projects.json`。项目路径必须相对于 `projectRoot`；当控制台要求确认项目时，确认后仍然只会先启动只读 Planner。
 
@@ -103,6 +156,10 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 ## v1.0-beta 发布准备
 
 v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Decision、Workflow、Task、审批、资源和审计边界不变，只收紧首次使用说明、版本检查、发布文件可见性和可重复的 Todo 验收。详见 [v1.0-beta 发布审计](docs/v1.0-beta-release-audit.md)。
+
+## v1.8 Beta 发布候选
+
+v1.8 把 Decision、Project Context、Project Intelligence、Human-GPT Collaboration 与 Project Continuity 收敛成公开 Beta 候选。新增的 Project Health 与发布状态完全由已有 Workflow、Review、Memory 元数据和静态发布元数据确定，不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [Changelog](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.md#end-to-end-release-validation)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
 
 ## 架构
 
@@ -131,15 +188,24 @@ ChatGPT Web / Supervisor Console
 | 层 | 职责 |
 | --- | --- |
 | Supervisor Console | 输入需求、查看最近任务、审批、结果和可理解的安全状态。 |
-| Supervisor Decision | 持久化意图、目标、注册项目、判断依据、置信度、约束和下一步动作；不能创建 Task。 |
-| Project Context | 只解析注册项目；目标有歧义时停止并要求用户确认。 |
+| Supervisor Decision | 持久化意图、目标、注册项目、技术方向、预期修改、验证计划、置信度、约束和下一步动作；不能创建 Task。 |
+| Project Context | 管理注册的 `projectId/workspacePath`，暴露受限的 GPT-only instructions 与 Project Memory；目标有歧义时停止。 |
+| Project Session | 用文件元数据把 Workflow 归属到一个项目；不保存 ChatGPT 消息。 |
 | Workflow Planner | 选择数据驱动 Definition，记录目标、原因、约束和阶段。 |
 | Workflow Orchestrator | 推进阶段并按顺序创建 Task，不能生成或绕过审批。 |
 | Task Runtime | 持久化 Task/Attempt 生命周期、heartbeat、事件、取消和重启恢复。 |
 | Harness | 执行项目路径、工具、审批、资源、副作用和审计契约。 |
 | Worker | 通过 Claude Code 完成受约束的读取和已审批修改。 |
 
-现有 MCP 工具保持兼容。产品控制台使用 Bridge 内的产品 API，并调用同一个 Workflow Runtime 和审批边界；不会直接调用 Worker 或 Harness。
+现有 MCP 工具保持兼容。v1.2 仅增量增加只读 `cc_list_workflow_definitions`，不改变现有工具输入或行为。产品控制台使用 Bridge 内的产品 API，并调用同一个 Workflow Runtime 和审批边界；不会直接调用 Worker 或 Harness。
+
+v1.4 增加只读 `cc_get_supervisor_review_package` 投影：它持久化原始需求、Decision 时冻结的 Project Memory、实现证据和 Reviewer 结果，供 ChatGPT Web 在不重新运行 Agent 的情况下复核已完成或失败的 Workflow。旧 `cc_run_approved_task` 仍是独立任务兼容入口，不会批准或推进 Workflow；Workflow 的人工检查点必须使用 `cc_approve_workflow`。
+
+v1.5 在 completed/failed Workflow 页面增加紧凑的 **在 ChatGPT 中审查** 交接入口。Dashboard 只提供 Workflow/Project id、现有 Review Package 工具调用和建议提示词，不调用 GPT API。需要 GPT 判断的字段在明确提交 Review Result 前保持为空。
+
+v1.6 增加 Project Intelligence 层。`cc_record_supervisor_review_result` 可以保存经过明确确认的 ChatGPT Supervisor 结论，但不改变 Workflow 状态。待处理的证据型 Proposal 只能通过 `cc_apply_memory_update_proposal` 或本地 Dashboard，在具名确认后应用；Runtime 仅追加到 `Recent Evolution`，保留原 Memory，并记录前后 digest，整个过程不运行 Worker。详见[架构说明](docs/ARCHITECTURE.md)和 [Project Memory 分层](docs/project-memory.md)。
+
+v1.7 增加 Project Continuity。Dashboard 默认进入 Project Overview，按页查看 Brief、Memory、Sessions、近期 Workflows 和开放问题；Artifact Center 只读展示已有 Plan、Approval、Execution Evidence、Changes、Review 和 Memory Impact。新增 MCP 仅有只读的 `cc_get_project_continuity`，不会返回庞大的事件历史。Project Brief 只有在明确确认并保存 GPT Supervisor Review 后才会包含建议，不会从 Worker 自述或未确认 Session 上下文伪造判断。
 
 ## Workflow 类型
 
@@ -188,6 +254,8 @@ ChatGPT Web / Supervisor Console
 - `.agents/resource-profiles.json`：资源包和全局硬上限；
 - `.agents/workflow-definitions.json`：Workflow 选择信息和阶段；
 - `.agents/projects.json`：注册的相对项目路径和选择别名；
+- `AI_SUPERVISOR.md`：可选、仅供 GPT 使用的项目指令；原文不会复制到 Worker prompt；
+- `PROJECT_MEMORY.md`：可选、仅供 GPT 使用的项目目标、技术决策、重要修改、已知问题与后续计划；
 - `mcp-server/config.example.json`：只包含占位符的 Bridge 模板。
 
 机器本地、已忽略配置：
@@ -232,6 +300,7 @@ $env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
 node .\runtime\workflow-planner.test.mjs
 node .\runtime\workflow-runtime.test.mjs
 node .\runtime\supervisor-brain.test.mjs
+node .\runtime\project-continuity.test.mjs
 node .\runtime\runtime-retention.test.mjs
 node .\runtime\harness-runner.test.mjs
 node .\runtime\provider-preflight.test.mjs
@@ -240,6 +309,8 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 node .\workspace\release-beta-todo-demo\demo.test.mjs
 node .\mcp-server\supervisor-dashboard-routes.test.mjs
 node .\mcp-server\supervisor-product-view.test.mjs
+node .\workspace\supervisor-dashboard\dashboard-ui.test.mjs
+.\scripts\doctor-nvm.test.ps1
 ```
 
 只有在确认模型费用和项目边界后，才应执行真实 Worker 测试。

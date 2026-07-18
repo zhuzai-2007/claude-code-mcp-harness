@@ -3,8 +3,10 @@ import { buildSupervisorProductView } from "./supervisor-product-view.mjs";
 
 const taskIdPattern = /^task_[a-zA-Z0-9_-]+$/;
 const workflowIdPattern = /^workflow_[a-zA-Z0-9_-]+$/;
+const folderIdPattern = /^(?:default|folder_[a-zA-Z0-9_-]+)$/;
 const attemptIdPattern = /^\d{8}-\d{6}-\d{3}$/;
 const decisionIdPattern = /^decision_[a-zA-Z0-9_-]+$/;
+const projectIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 const taskStatuses = new Set(["queued", "running", "waiting_approval", "succeeded", "failed", "cancelled", "interrupted"]);
 const workflowStatuses = new Set(["created", "planning", "planned", "waiting_approval", "running", "reviewing", "completed", "failed", "queued", "succeeded"]);
 
@@ -38,7 +40,7 @@ function isLocalConsoleOrigin(req) {
   } catch { return false; }
 }
 
-export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, dashboardRoot }) {
+export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, workflowMetadataStore, dashboardRoot }) {
   const inspectTask = async (task) => {
     const attempts = (task.attempts || []).map((attempt) => {
       const inspection = taskRunner?.inspectAttempt?.(attempt.attemptId) || { audit: null, recentToolCalls: [], observedChanges: [], artifactFiles: [] };
@@ -54,7 +56,8 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
       const task = await taskRuntime.getTask(ref.taskId);
       tasks.push(task ? { ...ref, ...(await inspectTask(task)) } : ref);
     }
-    return { ...workflow, tasks, product: buildSupervisorProductView(workflow, tasks) };
+    const metadata = workflowMetadataStore ? await workflowMetadataStore.read(workflow.workflowId) : { schemaVersion: 1, workflowId: workflow.workflowId, displayName: null, archived: false, updatedAt: null };
+    return { ...workflow, metadata, tasks, product: buildSupervisorProductView(workflow, tasks) };
   };
 
   const parseJsonBody = express.json({ limit: "32kb", strict: true });
@@ -80,9 +83,68 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     res.json({ status: "success", workflows: productWorkflows });
   }));
 
+  app.get("/api/supervisor/folders", route(async (_req, res) => {
+    noStore(res);
+    if (!workflowMetadataStore) return res.status(503).json({ status: "metadata_unavailable", error: "Workflow metadata storage is unavailable." });
+    res.json({ status: "success", folders: await workflowMetadataStore.listFolders() });
+  }));
+
+  app.post("/api/supervisor/folders", route(async (req, res) => {
+    noStore(res);
+    if (!workflowMetadataStore) return res.status(503).json({ status: "metadata_unavailable", error: "Workflow metadata storage is unavailable." });
+    let name;
+    try { name = textField(req.body?.name, { name: "name", max: 60 }); }
+    catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    res.status(201).json({ status: "success", folder: await workflowMetadataStore.createFolder(name) });
+  }));
+
+  app.patch("/api/supervisor/folders/:folderId", route(async (req, res) => {
+    noStore(res);
+    const { folderId } = req.params;
+    if (!folderIdPattern.test(folderId) || folderId === "default") return res.status(400).json({ status: "invalid_input", error: "The default folder cannot be changed." });
+    if (!workflowMetadataStore) return res.status(503).json({ status: "metadata_unavailable", error: "Workflow metadata storage is unavailable." });
+    const body = req.body || {};
+    if (!Object.hasOwn(body, "name") && !Object.hasOwn(body, "pinned")) return res.status(400).json({ status: "invalid_input", error: "Provide name or pinned." });
+    const patch = {};
+    if (Object.hasOwn(body, "name")) {
+      try { patch.name = textField(body.name, { name: "name", max: 60 }); }
+      catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    }
+    if (Object.hasOwn(body, "pinned")) {
+      if (typeof body.pinned !== "boolean") return res.status(400).json({ status: "invalid_input", error: "pinned must be a boolean." });
+      patch.pinned = body.pinned;
+    }
+    try { res.json({ status: "success", folder: await workflowMetadataStore.updateFolder(folderId, patch) }); }
+    catch (error) { res.status(404).json({ status: "folder_not_found", error: error.message }); }
+  }));
+
+  app.delete("/api/supervisor/folders/:folderId", route(async (req, res) => {
+    noStore(res);
+    const { folderId } = req.params;
+    if (!folderIdPattern.test(folderId) || folderId === "default") return res.status(400).json({ status: "invalid_input", error: "The default folder cannot be deleted." });
+    if (!workflowMetadataStore) return res.status(503).json({ status: "metadata_unavailable", error: "Workflow metadata storage is unavailable." });
+    try { res.json({ status: "success", result: await workflowMetadataStore.deleteFolder(folderId) }); }
+    catch (error) { res.status(404).json({ status: "folder_not_found", error: error.message }); }
+  }));
+
   app.get("/api/supervisor/projects", route(async (_req, res) => {
     noStore(res);
-    res.json({ status: "success", projects: await supervisorService.listProjects() });
+    const projects = supervisorService.listProjectViews ? await supervisorService.listProjectViews() : await supervisorService.listProjects();
+    res.json({ status: "success", projects });
+  }));
+
+  app.get("/api/supervisor/projects/:projectId", route(async (req, res) => {
+    noStore(res);
+    if (!projectIdPattern.test(req.params.projectId)) return res.status(400).json({ status: "invalid_input", error: "Invalid projectId." });
+    try { res.json({ status: "success", context: await supervisorService.getProjectContext(req.params.projectId) }); }
+    catch (error) { res.status(404).json({ status: "project_not_found", error: error.message }); }
+  }));
+
+  app.get("/api/supervisor/projects/:projectId/continuity", route(async (req, res) => {
+    noStore(res);
+    if (!projectIdPattern.test(req.params.projectId)) return res.status(400).json({ status: "invalid_input", error: "Invalid projectId." });
+    try { res.json({ status: "success", context: await supervisorService.getProjectContinuity(req.params.projectId) }); }
+    catch (error) { res.status(404).json({ status: "project_not_found", error: error.message }); }
   }));
 
   app.get("/api/supervisor/provider-preflight", route(async (_req, res) => {
@@ -117,12 +179,18 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
       outcome = await supervisorService.submitRequest({
         userRequest,
         projectId: req.body?.projectId || null,
-        decisionId: req.body?.decisionId || null
+        decisionId: req.body?.decisionId || null,
+        clarificationDecisionId: req.body?.clarificationDecisionId || null,
+        clarificationResponse: req.body?.clarificationResponse || null,
+        sessionId: req.body?.sessionId || null,
+        sessionName: req.body?.sessionName || null,
+        supervisorSession: req.body?.supervisorSession || null
       });
     } catch (error) {
       return res.status(400).json({ status: "invalid_input", error: error.message });
     }
     if (outcome.status === "project_confirmation_required") return res.status(409).json(outcome);
+    if (outcome.status === "clarification_required") return res.status(409).json(outcome);
     if (!outcome.workflow) return res.json(outcome);
     res.status(201).json({ status: "success", decision: outcome.decision, workflow: await inspectWorkflow(outcome.workflow) });
   }));
@@ -134,6 +202,81 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     const workflow = await workflowRuntime.getWorkflow(workflowId);
     if (!workflow) return res.status(404).json({ status: "workflow_not_found", workflowId });
     res.json({ status: "success", workflow: await inspectWorkflow(workflow) });
+  }));
+
+  app.get("/api/supervisor/workflows/:workflowId/review-package", route(async (req, res) => {
+    noStore(res);
+    const { workflowId } = req.params;
+    if (!workflowIdPattern.test(workflowId)) return res.status(400).json({ status: "invalid_input", error: "Invalid workflow id." });
+    const reviewPackage = await supervisorService.getWorkflowReviewPackage(workflowId);
+    if (!reviewPackage) return res.status(404).json({ status: "workflow_not_found", workflowId });
+    res.json({ status: "success", reviewPackage });
+  }));
+
+  app.get("/api/supervisor/workflows/:workflowId/artifacts", route(async (req, res) => {
+    noStore(res);
+    const { workflowId } = req.params;
+    if (!workflowIdPattern.test(workflowId)) return res.status(400).json({ status: "invalid_input", error: "Invalid workflow id." });
+    const artifacts = await supervisorService.getWorkflowArtifactCenter(workflowId);
+    if (!artifacts) return res.status(404).json({ status: "workflow_not_found", workflowId });
+    res.json({ status: "success", artifacts });
+  }));
+
+  app.get("/api/supervisor/workflows/:workflowId/project-intelligence", route(async (req, res) => {
+    noStore(res);
+    const { workflowId } = req.params;
+    if (!workflowIdPattern.test(workflowId)) return res.status(400).json({ status: "invalid_input", error: "Invalid workflow id." });
+    const intelligence = await supervisorService.getWorkflowProjectIntelligence(workflowId);
+    if (!intelligence) return res.status(404).json({ status: "workflow_not_found", workflowId });
+    res.json({ status: "success", intelligence });
+  }));
+
+  app.post("/api/supervisor/workflows/:workflowId/memory-proposal/apply", route(async (req, res) => {
+    noStore(res);
+    const { workflowId } = req.params;
+    if (!workflowIdPattern.test(workflowId)) return res.status(400).json({ status: "invalid_input", error: "Invalid workflow id." });
+    let proposalId, appliedBy, confirmationReason;
+    try {
+      proposalId = textField(req.body?.proposalId, { name: "proposalId", max: 200 });
+      appliedBy = textField(req.body?.appliedBy, { name: "appliedBy", max: 100 });
+      confirmationReason = textField(req.body?.confirmationReason, { name: "confirmationReason", max: 1000 });
+      if (req.body?.confirmed !== true) throw new Error("confirmed must be true after explicit human confirmation.");
+    } catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    try {
+      res.json({ status: "success", ...(await supervisorService.applyMemoryProposal({ workflowId, proposalId, appliedBy, confirmationReason, confirmed: true })) });
+    } catch (error) {
+      res.status(/not found/i.test(error.message) ? 404 : 409).json({ status: "memory_apply_conflict", error: error.message });
+    }
+  }));
+
+  app.patch("/api/supervisor/workflows/:workflowId/metadata", route(async (req, res) => {
+    noStore(res);
+    const { workflowId } = req.params;
+    if (!workflowIdPattern.test(workflowId)) return res.status(400).json({ status: "invalid_input", error: "Invalid workflow id." });
+    const workflow = await workflowRuntime.getWorkflow(workflowId);
+    if (!workflow) return res.status(404).json({ status: "workflow_not_found", workflowId });
+    if (!workflowMetadataStore) return res.status(503).json({ status: "metadata_unavailable", error: "Workflow metadata storage is unavailable." });
+    const body = req.body || {};
+    if (!Object.hasOwn(body, "displayName") && !Object.hasOwn(body, "archived") && !Object.hasOwn(body, "folderId")) return res.status(400).json({ status: "invalid_input", error: "Provide displayName, archived, or folderId." });
+    const patch = {};
+    if (Object.hasOwn(body, "displayName")) {
+      if (body.displayName === null || String(body.displayName).trim() === "") patch.displayName = null;
+      else {
+        const displayName = String(body.displayName).trim();
+        if (displayName.length > 120) return res.status(400).json({ status: "invalid_input", error: "displayName must contain at most 120 characters." });
+        patch.displayName = displayName;
+      }
+    }
+    if (Object.hasOwn(body, "archived")) {
+      if (typeof body.archived !== "boolean") return res.status(400).json({ status: "invalid_input", error: "archived must be a boolean." });
+      patch.archived = body.archived;
+    }
+    if (Object.hasOwn(body, "folderId")) {
+      if (!folderIdPattern.test(String(body.folderId || ""))) return res.status(400).json({ status: "invalid_input", error: "Invalid folderId." });
+      patch.folderId = String(body.folderId);
+    }
+    try { res.json({ status: "success", metadata: await workflowMetadataStore.update(workflowId, patch) }); }
+    catch (error) { res.status(400).json({ status: "invalid_input", error: error.message }); }
   }));
 
   app.post("/api/supervisor/workflows/:workflowId/approve", route(async (req, res) => {

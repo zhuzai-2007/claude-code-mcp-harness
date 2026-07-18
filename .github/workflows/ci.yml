@@ -36,10 +36,15 @@ jobs:
           node --check .\mcp-server\side-effect-guard.mjs
           node .\mcp-server\side-effect-guard.test.mjs
           node .\mcp-server\resource-profile-input.test.mjs
+          node .\mcp-server\workflow-definition-capabilities.test.mjs
           node .\runtime\task-runtime.test.mjs
           node .\runtime\workflow-planner.test.mjs
           node .\runtime\workflow-runtime.test.mjs
           node .\runtime\supervisor-brain.test.mjs
+          node .\runtime\supervisor-review-package.test.mjs
+          node .\runtime\project-intelligence.test.mjs
+          node .\runtime\project-continuity.test.mjs
+          node .\scripts\onboarding-contract.test.mjs
           node .\runtime\runtime-retention.test.mjs
           node .\runtime\harness-runner.test.mjs
           node .\runtime\provider-preflight.test.mjs
@@ -48,6 +53,10 @@ jobs:
           node .\workspace\release-beta-todo-demo\demo.test.mjs
           node .\mcp-server\supervisor-dashboard-routes.test.mjs
           node .\mcp-server\supervisor-product-view.test.mjs
+          node .\workspace\supervisor-dashboard\dashboard-ui.test.mjs
+      - name: Doctor nvm guidance
+        shell: pwsh
+        run: .\scripts\doctor-nvm.test.ps1
       - name: Product startup check
         shell: pwsh
         run: |

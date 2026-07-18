@@ -25,6 +25,14 @@ function publicError(error) {
   return { code: "runtime_error", message: String(error?.message || error) };
 }
 
+function normalizeProjectContext(projectContext) {
+  if (!projectContext) return null;
+  const projectId = String(projectContext.projectId || "").trim();
+  const workspacePath = String(projectContext.workspacePath || "").trim().replaceAll("\\", "/");
+  if (!projectId || !workspacePath) throw new Error("projectContext requires projectId and workspacePath");
+  return { projectId, name: String(projectContext.name || projectId), workspacePath, workspaceRelativePath: projectContext.workspaceRelativePath || null };
+}
+
 function ensureTaskResourceProfile(task) {
   const settings = task.settings || {};
   const resolved = resolveResourceProfile(settings.resourceProfile, {
@@ -110,7 +118,7 @@ export class TaskRuntime {
     this._drain();
   }
 
-  async createTask({ prompt, mode = "plan", resourceProfile = null, workerTimeoutSeconds, maxBudgetUsd, maxTurns, maxFilesRead, maxCommands, mockWorker = false, workflowId = null, role = null }) {
+  async createTask({ prompt, mode = "plan", resourceProfile = null, workerTimeoutSeconds, maxBudgetUsd, maxTurns, maxFilesRead, maxCommands, mockWorker = false, workflowId = null, role = null, projectContext = null, sessionId = null }) {
     const normalizedPrompt = String(prompt || "").trim();
     if (!normalizedPrompt) throw new Error("prompt is required");
     if (!VALID_MODES.has(mode)) throw new Error(`Unsupported task mode: ${mode}`);
@@ -122,6 +130,8 @@ export class TaskRuntime {
       ...(workerTimeoutSeconds == null ? {} : { timeoutSeconds: workerTimeoutSeconds })
     });
     const resourceLimits = selectedProfile.limits;
+    const projectBinding = normalizeProjectContext(projectContext);
+    const executionDirectory = String(this.runner.projectRoot || "").replaceAll("\\", "/") || null;
     const createdAt = nowIso();
     const taskId = `task_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`;
     const boundary = {
@@ -134,7 +144,8 @@ export class TaskRuntime {
       dependencyInstall: false,
       gitWrite: false,
       recursiveDelete: false,
-      externalDirectories: []
+      externalDirectories: [],
+      ...(projectBinding ? { projectId: projectBinding.projectId, workspacePath: projectBinding.workspacePath } : {})
     };
     const task = {
       schemaVersion: 1,
@@ -166,11 +177,16 @@ export class TaskRuntime {
       attempts: [],
       result: null,
       error: null,
+      projectContext: projectBinding,
+      projectId: projectBinding?.projectId || null,
+      workspacePath: projectBinding?.workspacePath || null,
+      executionDirectory,
+      sessionId: sessionId || null,
       ...(workflowId ? { workflowId, role } : {})
     };
     await this.store.createTask(task);
     const created = await this._mutate(taskId, (current, emit) => {
-      emit("task.created", { mode: current.mode, revision: current.revision, promptHash: current.promptHash, resourceProfile: current.settings.resourceProfile, resourceLimits: current.settings.resourceLimits, workflowId: current.workflowId || null, role: current.role || null });
+      emit("task.created", { mode: current.mode, revision: current.revision, promptHash: current.promptHash, resourceProfile: current.settings.resourceProfile, resourceLimits: current.settings.resourceLimits, workflowId: current.workflowId || null, role: current.role || null, projectId: current.projectId, workspacePath: current.workspacePath, executionDirectory: current.executionDirectory, sessionId: current.sessionId });
       if (current.status === "queued") emit("task.queued", { reason: "created" });
       else emit("approval.requested", { revision: current.revision, promptHash: current.promptHash, capabilityBoundary: current.capabilityBoundary });
     });
@@ -328,6 +344,11 @@ export class TaskRuntime {
         workerPid: null,
         resourceProfile: task.settings.resourceProfile,
         resourceLimits: task.settings.resourceLimits,
+        projectContext: task.projectContext || null,
+        projectId: task.projectId || null,
+        workspacePath: task.workspacePath || null,
+        executionDirectory: task.executionDirectory || String(this.runner.projectRoot || "").replaceAll("\\", "/") || null,
+        sessionId: task.sessionId || null,
         artifactReference: null,
         error: null
       };
@@ -341,7 +362,7 @@ export class TaskRuntime {
       if (task.approval && !task.approval.attemptId) task.approval.attemptId = attemptId;
       await this.store.writeAttempt(taskId, attempt);
       emit("task.started", { attemptId });
-      emit("attempt.started", { attemptId, mode: task.mode, resourceProfile: attempt.resourceProfile, resourceLimits: attempt.resourceLimits });
+      emit("attempt.started", { attemptId, mode: task.mode, resourceProfile: attempt.resourceProfile, resourceLimits: attempt.resourceLimits, projectId: attempt.projectId, workspacePath: attempt.workspacePath, executionDirectory: attempt.executionDirectory, sessionId: attempt.sessionId });
       emit("worker.started", { attemptId });
       emit("phase.changed", { stage: "starting_worker", attemptId });
     });

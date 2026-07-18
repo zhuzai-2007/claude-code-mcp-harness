@@ -9,90 +9,169 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="./"><span class="brand-mark">S</span><span><strong>Supervisor</strong><small>Personal development runtime</small></span></a>
-    <div class="connection"><span id="connection-dot" class="connection-dot"></span><span><strong id="connection">Connecting</strong><small id="last-updated">Waiting for runtime</small></span><div id="provider-preflight" class="preflight-state"><strong id="preflight-status">Provider not checked</strong><small id="preflight-detail">No project content is sent</small></div><button id="run-preflight" class="secondary-button" type="button">Test provider</button><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button></div>
+    <a class="brand" href="./"><span class="brand-mark">S</span><span><strong>Supervisor</strong><small data-i18n="brand.subtitle">Personal development runtime</small></span></a>
+    <div class="connection">
+      <label class="language-control"><span class="sr-only">Language</span><select id="language-switch" aria-label="Language"><option value="zh-CN">中文</option><option value="en">English</option></select></label>
+      <span id="connection-dot" class="connection-dot"></span><span><strong id="connection">Connecting</strong><small id="last-updated">Waiting for runtime</small></span>
+      <div id="provider-preflight" class="preflight-state"><strong id="preflight-status">Provider not checked</strong><small id="preflight-detail">No project content is sent</small></div>
+      <button id="run-preflight" class="secondary-button" type="button">Test provider</button><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button>
+    </div>
   </header>
 
   <main class="page-shell">
-    <section class="new-task-card">
-      <div><p class="eyebrow">Start a supervised workflow</p><h1>What would you like to change?</h1><p class="lede">Describe the outcome in plain language. Supervisor will plan the work first and pause before any file changes.</p></div>
-      <form id="new-task-form" class="new-task-form">
-        <label class="sr-only" for="user-request">Development request</label>
-        <textarea id="user-request" name="userRequest" maxlength="5000" required placeholder="For example: 给任务看板增加导出 JSON 功能"></textarea>
-        <div class="form-footer"><span>Planning is read-only · execution always requires approval</span><button id="create-task" class="primary-button" type="submit">Create workflow</button></div>
-      </form>
-      <div id="action-message" class="action-message" role="status" aria-live="polite"></div>
-      <div id="project-confirmation" class="project-confirmation hidden">
-        <div><p class="eyebrow">Project confirmation</p><h2>Which registered project should Supervisor use?</h2><p>No Worker or Workflow starts until this ambiguity is resolved.</p></div>
-        <label>Target project<select id="project-options"></select></label>
-        <div class="approval-actions"><button id="cancel-project" class="danger-button" type="button">Cancel</button><button id="confirm-project" class="primary-button" type="button">Confirm project</button></div>
+    <details id="local-entry" class="local-entry panel">
+      <summary><span><strong data-i18n="entry.label">Local fallback entry</strong><small data-i18n="entry.hint">Primary: ChatGPT Supervisor · fallback: local rule mode</small></span><span class="chevron">⌄</span></summary>
+      <div class="local-entry-content">
+        <div><p class="eyebrow" data-i18n="entry.eyebrow">Start a supervised workflow</p><h1 data-i18n="entry.title">What would you like to change?</h1><p class="lede" data-i18n="entry.description">Describe the outcome in plain language. Supervisor will plan first and pause before file changes.</p></div>
+        <form id="new-task-form" class="new-task-form">
+          <label class="sr-only" for="user-request">Development request</label>
+          <textarea id="user-request" name="userRequest" maxlength="5000" required data-i18n-placeholder="entry.placeholder"></textarea>
+          <div class="form-footer"><span data-i18n="entry.guard">Planning is read-only · execution always requires approval</span><button id="create-task" class="primary-button" type="submit" data-i18n="entry.create">Create workflow</button></div>
+        </form>
+        <div id="action-message" class="action-message" role="status" aria-live="polite"></div>
+        <div id="project-confirmation" class="project-confirmation hidden">
+          <div><p class="eyebrow" data-i18n="project.eyebrow">Project confirmation</p><h2 data-i18n="project.title">Which registered project should Supervisor use?</h2><p data-i18n="project.description">No Worker or Workflow starts until this ambiguity is resolved.</p></div>
+          <label><span data-i18n="project.target">Target project</span><select id="project-options"></select></label>
+          <div class="approval-actions"><button id="cancel-project" class="danger-button" type="button" data-i18n="project.cancel">Cancel</button><button id="confirm-project" class="primary-button" type="button" data-i18n="project.confirm">Confirm project</button></div>
+        </div>
       </div>
-    </section>
+    </details>
 
-    <section id="overview" class="overview-grid" aria-label="Workflow overview"></section>
-
-    <div class="console-grid">
+    <details id="overview-disclosure" class="overview-disclosure panel">
+      <summary><span><strong data-i18n="overview.title">Overall status</strong><small data-i18n="overview.hint">Active, approval, completion, failure, and observed cost</small></span><span class="chevron">⌄</span></summary>
+      <section id="overview" class="overview-grid" aria-label="Workflow overview"></section>
+    </details>
+    <div id="console-grid" class="console-grid">
+      <button id="show-recent" class="show-recent hidden" type="button" data-i18n-title="recent.show" title="Show recent work"><span>›</span><small data-i18n="recent.show">Show recent work</small></button>
       <aside class="recent-panel panel">
-        <div class="panel-heading"><div><p class="eyebrow">Activity</p><h2>Recent work</h2></div><span id="workflow-count" class="count">0</span></div>
-        <div id="workflow-list" class="workflow-list"><div class="empty-state">No workflows yet.</div></div>
+        <div class="panel-heading"><div><p class="eyebrow" data-i18n="recent.eyebrow">Activity</p><h2 data-i18n="recent.title">Recent work</h2></div><div class="recent-actions"><span id="workflow-count" class="count">0</span><button id="create-folder" class="icon-button compact create-folder-button" type="button" data-i18n-title="folders.create" title="Create folder">+</button><button id="hide-recent" class="icon-button compact" type="button" data-i18n-title="recent.hide" title="Hide recent work">‹</button></div></div>
+        <details id="project-browser" class="project-browser" open>
+          <summary><span data-i18n="projects.title">Projects</span><strong id="project-count">0</strong></summary>
+          <div id="project-list" class="project-list"></div>
+          <div id="project-summary" class="project-summary hidden"></div>
+        </details>
+        <div id="workflow-list" class="workflow-list"><div class="empty-state" data-i18n="recent.empty">No workflows yet.</div></div>
       </aside>
 
       <section class="detail-column">
-        <article id="workflow-empty" class="panel empty-hero"><div><span class="empty-icon">◇</span><h2>Select a workflow</h2><p>Planning, approval, implementation, and review will appear here.</p></div></article>
-
+        <article id="project-overview" class="panel project-overview hidden">
+          <div class="project-overview-heading"><div><p class="eyebrow" data-i18n="projects.title">Projects</p><h2 id="project-overview-name">Project</h2><p id="project-overview-description" class="muted"></p></div><span id="project-overview-status"></span></div>
+          <nav class="project-view-tabs" aria-label="Project continuity"><button class="active" type="button" data-project-view="brief">Brief</button><button type="button" data-project-view="memory">Memory</button><button type="button" data-project-view="sessions">Sessions</button><button type="button" data-project-view="workflows">Recent Workflows</button><button type="button" data-project-view="issues">Open Issues</button></nav>
+          <div id="project-overview-content" class="project-overview-content"></div>
+        </article>
+        <article id="workflow-empty" class="panel empty-hero"><div><span class="empty-icon">◇</span><h2 data-i18n="empty.title">Select a workflow</h2><p data-i18n="empty.description">Planning, approval, implementation, and review will appear here.</p></div></article>
         <div id="workflow-detail" class="hidden">
-          <article class="panel workflow-hero">
-            <div class="hero-heading"><div><p class="eyebrow" id="workflow-type">Workflow</p><h2 id="workflow-request">Request</h2></div><span id="workflow-status"></span></div>
-            <div id="workflow-summary" class="hero-metrics"></div>
-            <div id="next-action" class="next-action"></div>
+          <div id="workflow-navigation" class="workflow-navigation">
+            <article class="panel workflow-hero">
+              <div class="hero-heading"><div><p class="eyebrow" data-i18n="workflow.eyebrow">Workflow</p><h2 id="workflow-request">Request</h2></div><span id="workflow-status"></span></div>
+              <div class="hero-view-switch" role="tablist"><button id="workflow-summary-tab" type="button" role="tab" data-hero-view="summary" aria-selected="false"><span id="workflow-type">Workflow</span></button><button id="workflow-timeline-tab" class="active" type="button" role="tab" data-hero-view="timeline" aria-selected="true" data-i18n="timeline.title">Stage timeline</button></div>
+              <div id="workflow-summary-pane" class="hero-pane hidden"><div id="workflow-summary" class="hero-metrics"></div><div id="next-action" class="next-action"></div></div>
+              <div id="workflow-timeline-pane" class="hero-pane"><div class="timeline-heading"><span data-i18n="timeline.eyebrow">Progress</span><span id="stage-progress"></span></div><nav id="stage-timeline" class="stage-timeline" aria-label="Workflow stages"></nav></div>
+            </article>
+          </div>
+
+          <div id="stage-plan" class="stage-view">
+            <article id="decision-panel" class="panel decision-panel">
+              <div class="panel-heading"><div><p class="eyebrow" data-i18n="decision.eyebrow">GPT Supervisor</p><h2 data-i18n="decision.title">Decision and plan</h2></div><span id="decision-source">Persisted before Workflow</span></div>
+              <div id="decision-content" class="decision-content"></div><div id="plan-result-grid" class="result-grid stage-results"></div>
+            </article>
+          </div>
+
+          <div id="stage-approval" class="stage-view hidden">
+            <article id="approval-panel" class="panel approval-panel hidden">
+              <div class="approval-heading"><div><p class="eyebrow" data-i18n="approval.eyebrow">Human checkpoint</p><h2 id="approval-title">Approval required</h2><p id="approval-reason"></p></div><span class="shield">⌾</span></div>
+              <div id="approval-preview" class="approval-preview"></div>
+              <form id="approval-form" class="approval-form">
+                <label><span data-i18n="approval.reviewer">Reviewer name</span><input id="reviewer-name" maxlength="100" required data-i18n-placeholder="approval.reviewerPlaceholder"></label>
+                <label><span data-i18n="approval.decisionReason">Decision reason</span><textarea id="decision-reason" maxlength="1000" required data-i18n-placeholder="approval.reasonPlaceholder"></textarea></label>
+                <div class="approval-actions"><button id="reject-workflow" class="danger-button" type="button" data-i18n="approval.reject">Reject</button><button id="approve-workflow" class="primary-button" type="submit" data-i18n="approval.approve">Approve and run</button></div>
+              </form>
+            </article>
+          </div>
+
+          <div id="stage-implementation" class="stage-view hidden">
+            <section id="implementation-result-grid" class="result-grid"></section>
+            <article class="panel policy-panel"><div class="panel-heading"><div><p class="eyebrow" data-i18n="implementation.eyebrow">Coder</p><h2 data-i18n="implementation.policy">Execution policy</h2></div><span data-i18n="implementation.enforced">Enforced locally</span></div><div id="execution-policy" class="policy-grid"></div></article>
+          </div>
+
+          <div id="stage-review" class="stage-view hidden">
+            <section id="review-result-grid" class="result-grid"></section>
+            <article id="recovery-panel" class="panel recovery-panel hidden">
+              <div class="panel-heading"><div><p class="eyebrow" data-i18n="recovery.eyebrow">Reliability</p><h2 data-i18n="recovery.title">Failure and recovery</h2></div><span id="failure-category">Failure</span></div>
+              <div id="failure-content" class="failure-content"></div>
+              <form id="recovery-form" class="recovery-form"><p data-i18n="recovery.description">A recovery creates a new Workflow from Planning. Previous history stays unchanged and no approval is reused.</p><label><span data-i18n="recovery.operator">Operator name</span><input id="recovery-operator" maxlength="100" required></label><label><span data-i18n="recovery.reason">Recovery reason</span><textarea id="recovery-reason" maxlength="1000" required></textarea></label><button id="retry-workflow" class="primary-button" type="submit" data-i18n="recovery.create">Create recovery workflow</button></form>
+            </article>
+          </div>
+
+          <article id="supervisor-collaboration" class="panel collaboration-panel hidden">
+            <div class="collaboration-heading">
+              <div><p class="eyebrow" data-i18n="collaboration.eyebrow">Human + GPT</p><h2 data-i18n="collaboration.title">Supervisor handoff</h2></div>
+              <button id="review-in-chatgpt" class="primary-button compact-button" type="button" data-i18n="collaboration.action">Review in ChatGPT</button>
+            </div>
+            <div id="collaboration-status" class="collaboration-status"></div>
+            <details id="project-intelligence-details" class="project-intelligence-details">
+              <summary><span data-i18n="intelligence.title">Project Intelligence</span><small data-i18n="intelligence.hint">Reviews, proposals, and applied updates</small></summary>
+              <div id="project-intelligence-content" class="project-intelligence-content"></div>
+            </details>
           </article>
 
-          <article id="decision-panel" class="panel decision-panel">
-            <div class="panel-heading"><div><p class="eyebrow">GPT Supervisor</p><h2>Decision</h2></div><span id="decision-source">Persisted before Workflow</span></div>
-            <div id="decision-content" class="decision-content"></div>
-          </article>
-
-          <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">Progress</p><h2>Stage timeline</h2></div><span id="stage-progress"></span></div>
-            <div id="stage-timeline" class="stage-timeline"></div>
-          </article>
-
-          <article id="recovery-panel" class="panel recovery-panel hidden">
-            <div class="panel-heading"><div><p class="eyebrow">Reliability</p><h2>Failure and recovery</h2></div><span id="failure-category">Failure</span></div>
-            <div id="failure-content" class="failure-content"></div>
-            <form id="recovery-form" class="recovery-form">
-              <p>A recovery creates a new Workflow from Planning. Previous history stays unchanged and no approval is reused.</p>
-              <label>Operator name<input id="recovery-operator" maxlength="100" required placeholder="Your name"></label>
-              <label>Recovery reason<textarea id="recovery-reason" maxlength="1000" required placeholder="What changed or why should this be retried?"></textarea></label>
-              <button id="retry-workflow" class="primary-button" type="submit">Create recovery workflow</button>
-            </form>
-          </article>
-
-          <article id="approval-panel" class="panel approval-panel hidden">
-            <div class="approval-heading"><div><p class="eyebrow">Human checkpoint</p><h2 id="approval-title">Approval required</h2><p id="approval-reason"></p></div><span class="shield">⌾</span></div>
-            <div id="approval-preview" class="approval-preview"></div>
-            <form id="approval-form" class="approval-form">
-              <label>Reviewer name<input id="reviewer-name" maxlength="100" required placeholder="Your name"></label>
-              <label>Decision reason<textarea id="decision-reason" maxlength="1000" required placeholder="Why is this bounded change safe to run?"></textarea></label>
-              <div class="approval-actions"><button id="reject-workflow" class="danger-button" type="button">Reject</button><button id="approve-workflow" class="primary-button" type="submit">Approve and run</button></div>
-            </form>
-          </article>
-
-          <section id="result-grid" class="result-grid"></section>
-
-          <article class="panel policy-panel">
-            <div class="panel-heading"><div><p class="eyebrow">Safety</p><h2>Execution policy</h2></div><span>Enforced locally</span></div>
-            <div id="execution-policy" class="policy-grid"></div>
-          </article>
-
-          <details class="panel advanced-panel">
-            <summary><span><strong>Technical details</strong><small>Task IDs, attempts, artifacts, and runtime events</small></span><span>Expand</span></summary>
-            <div class="advanced-content"><div id="technical-meta"></div><div id="task-list" class="technical-tasks"></div><div><div class="subheading"><h3>Event timeline</h3><span id="event-count">0</span></div><ol id="event-list" class="timeline"></ol></div></div>
+          <details id="artifact-center" class="panel artifact-center">
+            <summary><span><strong>Artifact Center</strong><small>Plan, approval, evidence, changes, review, and memory impact</small></span><span class="chevron">⌄</span></summary>
+            <div id="artifact-center-content" class="artifact-center-content"></div>
           </details>
+
+          <details class="panel advanced-panel"><summary><span><strong data-i18n="technical.title">Technical details</strong><small data-i18n="technical.subtitle">Task IDs, attempts, artifacts, and runtime events</small></span><span data-i18n="technical.expand">Expand</span></summary><div class="advanced-content"><div id="technical-meta"></div><div id="task-list" class="technical-tasks"></div><div><div class="subheading"><h3 data-i18n="technical.events">Event timeline</h3><span id="event-count">0</span></div><ol id="event-list" class="timeline"></ol></div></div></details>
         </div>
       </section>
     </div>
   </main>
+
+  <dialog id="workflow-metadata-dialog" class="metadata-dialog">
+    <form id="workflow-metadata-form" method="dialog">
+      <div class="dialog-hero"><span class="dialog-icon" aria-hidden="true">✦</span><div><p class="eyebrow" data-i18n="metadata.eyebrow">Session</p><h2 data-i18n="metadata.title">Workflow settings</h2><p data-i18n="metadata.description">Organize this session without changing its runtime history.</p></div><button id="metadata-close" class="icon-button dialog-close" value="cancel" type="button" aria-label="Close">×</button></div>
+      <div class="dialog-body">
+        <label class="field-card"><span data-i18n="metadata.name">Display name</span><input id="metadata-display-name" maxlength="120"><small data-i18n="metadata.nameHint">Leave empty to use the original request</small></label>
+        <label class="field-card"><span data-i18n="metadata.folder">Folder</span><select id="metadata-folder"></select><small data-i18n="metadata.folderHint">Folders only organize Dashboard metadata.</small></label>
+        <label class="setting-row"><span><strong data-i18n="metadata.archived">Archive session</strong><small data-i18n="metadata.archiveHint">Keep the session and its history, but mark it archived.</small></span><input id="metadata-archived" class="switch-input" type="checkbox"><span class="switch-control" aria-hidden="true"></span></label>
+      </div>
+      <div class="dialog-footer"><button class="secondary-button" value="cancel" type="button" id="metadata-cancel" data-i18n="metadata.cancel">Cancel</button><button class="primary-button" value="save" type="submit" data-i18n="metadata.save">Save changes</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="folder-dialog" class="metadata-dialog folder-dialog">
+    <form id="folder-form" method="dialog">
+      <div class="dialog-hero"><span class="dialog-icon folder-dialog-icon" aria-hidden="true">▱</span><div><p class="eyebrow" data-i18n="folders.eyebrow">Workspace</p><h2 id="folder-dialog-title" data-i18n="folders.newTitle">New folder</h2><p data-i18n="folders.description">Group related sessions without changing Workflow history.</p></div><button id="folder-close" class="icon-button dialog-close" value="cancel" type="button" aria-label="Close">×</button></div>
+      <div class="dialog-body"><label class="field-card"><span data-i18n="folders.name">Folder name</span><input id="folder-name" maxlength="60" required data-i18n-placeholder="folders.namePlaceholder"><small data-i18n="folders.nameHint">Use a short project or topic name.</small></label><div id="folder-delete-note" class="delete-note hidden"><strong data-i18n="folders.deleteTitle">Delete folder?</strong><p data-i18n="folders.deleteHint">Sessions in this folder will return to Default.</p></div></div>
+      <div class="dialog-footer split"><button id="delete-folder" class="danger-button subtle hidden" type="button" data-i18n="folders.delete">Delete folder</button><span></span><button class="secondary-button" value="cancel" type="button" id="folder-cancel" data-i18n="metadata.cancel">Cancel</button><button class="primary-button" value="save" type="submit" data-i18n="folders.save">Save folder</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="chatgpt-review-dialog" class="metadata-dialog review-dialog">
+    <form method="dialog">
+      <div class="dialog-hero review-dialog-hero"><span class="dialog-icon" aria-hidden="true">↗</span><div><p class="eyebrow" data-i18n="collaboration.eyebrow">Human + GPT</p><h2 data-i18n="collaboration.dialogTitle">Review in ChatGPT</h2><p data-i18n="collaboration.dialogDescription">Copy this handoff into the ChatGPT conversation connected to this Runtime.</p></div><button id="chatgpt-review-close" class="icon-button dialog-close" value="cancel" type="button" aria-label="Close">×</button></div>
+      <div class="dialog-body review-dialog-body">
+        <div class="handoff-identifiers"><span><small data-i18n="technical.workflowId">Workflow ID</small><code id="chatgpt-review-workflow-id"></code></span><span><small data-i18n="projects.project">Project</small><code id="chatgpt-review-project-id"></code></span></div>
+        <label class="field-card"><span data-i18n="collaboration.mcpCall">MCP package call</span><code id="chatgpt-review-tool-call" class="handoff-call"></code></label>
+        <label class="field-card"><span data-i18n="collaboration.prompt">Suggested Supervisor prompt</span><textarea id="chatgpt-review-prompt" class="handoff-prompt" readonly></textarea></label>
+        <p class="handoff-note" data-i18n="collaboration.noApi">This Dashboard only prepares the handoff. It does not call GPT or modify Project Memory.</p>
+      </div>
+      <div class="dialog-footer"><button id="chatgpt-review-cancel" class="secondary-button" value="cancel" type="button" data-i18n="metadata.cancel">Cancel</button><button id="copy-chatgpt-review" class="primary-button" value="copy" type="button" data-i18n="collaboration.copy">Copy prompt</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="memory-apply-dialog" class="metadata-dialog memory-apply-dialog">
+    <form id="memory-apply-form">
+      <div class="dialog-hero memory-dialog-hero"><span class="dialog-icon" aria-hidden="true">M</span><div><p class="eyebrow" data-i18n="intelligence.memory">Memory Proposal</p><h2 data-i18n="intelligence.applyTitle">Apply to Project Memory</h2><p data-i18n="intelligence.applyDescription">Append the reviewed proposal to Recent Evolution. Existing Memory remains intact.</p></div><button id="memory-apply-close" class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+      <div class="dialog-body">
+        <div id="memory-apply-preview" class="memory-apply-preview"></div>
+        <label class="field-card"><span data-i18n="intelligence.appliedBy">Applied by</span><input id="memory-applied-by" maxlength="100" required></label>
+        <label class="field-card"><span data-i18n="intelligence.confirmationReason">Confirmation reason</span><textarea id="memory-confirmation-reason" maxlength="1000" required></textarea></label>
+        <label class="memory-confirmation"><input id="memory-confirmed" type="checkbox" required><span data-i18n="intelligence.confirmation">I reviewed this evidence-based proposal and explicitly confirm updating PROJECT_MEMORY.md.</span></label>
+        <p class="handoff-note" data-i18n="intelligence.noWorker">This controlled append does not run a Worker and is recorded in Memory application history.</p>
+      </div>
+      <div class="dialog-footer"><button id="memory-apply-cancel" class="secondary-button" type="button" data-i18n="metadata.cancel">Cancel</button><button id="confirm-memory-apply" class="primary-button" type="submit" data-i18n="intelligence.apply">Confirm and apply</button></div>
+    </form>
+  </dialog>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

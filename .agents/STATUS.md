@@ -1,8 +1,8 @@
 # Worker Harness Status
 
-Product version: v1.0.0-beta.1
+Product version: v1.8.0-beta.1
 
-Status: v1.0-beta release candidate for single-user, operator-controlled local use; local gates pass, while the release Todo real-provider acceptance is pending provider connectivity.
+Status: v1.8-beta release candidate for single-user, operator-controlled local use. Automated, mock, and local non-paid gates pass; the documented fresh-session ChatGPT Web validation remains required before public Beta.
 
 ## Current Capabilities
 
@@ -26,6 +26,8 @@ Status: v1.0-beta release candidate for single-user, operator-controlled local u
 - Failed Workflow recovery that creates new history from Planning and never reuses approval metadata.
 - User-facing failure categories, failed-stage explanations, recovery steps, and linked recovery history in the Dashboard.
 - An isolated static validation project with repeatable behavior checks and recorded real Provider/Workflow/browser acceptance.
+- Human-GPT Review handoff, confirmed Supervisor Review Results, and confirmation-required Project Memory proposals.
+- Project Continuity with Project Briefs, Sessions, Artifact Center, deterministic Project Health, and explicit release-readiness metadata.
 
 ## Important Boundaries
 
