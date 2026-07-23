@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { loadWorkflowDefinitions } from "./workflow-definitions.mjs";
 import { WorkflowPlanner } from "./workflow-planner.mjs";
@@ -13,8 +13,43 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const dataRoot = path.join(repoRoot, ".agent-runs", `supervisor-brain-test-${process.pid}-${Date.now()}`);
 await mkdir(dataRoot, { recursive: true });
 try {
+  const fixtureWorkspaceRoot = path.join(dataRoot, "workspace");
+  const fixtureProjectRoot = path.join(fixtureWorkspaceRoot, "dogfood-study-board");
+  const fixtureProjectPath = path.relative(repoRoot, fixtureProjectRoot).replaceAll("\\", "/");
+  const fixtureRegistryPath = path.join(dataRoot, "projects.local.json");
+  await mkdir(fixtureProjectRoot, { recursive: true });
+  await writeFile(path.join(fixtureProjectRoot, "AI_SUPERVISOR.md"), [
+    "# Test Supervisor Context",
+    "",
+    "Keep the browser task board dependency-free and preserve localStorage behavior.",
+    "When planning dark mode, verify theme persistence and readable contrast."
+  ].join("\n"), "utf8");
+  await writeFile(fixtureRegistryPath, `${JSON.stringify({
+    schemaVersion: 1,
+    projects: [{
+      projectId: "dogfood-study-board",
+      name: "Dogfood Study Board",
+      workspacePath: fixtureProjectPath,
+      description: "A small browser task board used for bounded feature-change dogfood.",
+      language: "HTML, CSS, JavaScript",
+      stack: ["Static HTML", "CSS", "Browser JavaScript", "localStorage"],
+      aliases: ["任务看板", "study board", "dogfood study board"],
+      constraints: [
+        "Keep the application dependency-free and browser-only.",
+        "Preserve existing task data and localStorage behavior unless the request explicitly changes it.",
+        "Limit changes to the registered task-board directory."
+      ]
+    }]
+  }, null, 2)}\n`, "utf8");
+
   const store = new FileSupervisorStore(dataRoot);
-  const registry = new ProjectContextRegistry({ projectRoot: repoRoot, registryPath: path.join(repoRoot, ".agents", "projects.json"), usageProvider: () => store.readProjectUsage() });
+  const registry = new ProjectContextRegistry({
+    projectRoot: repoRoot,
+    registryPath: path.join(repoRoot, ".agents", "projects.json"),
+    localRegistryPath: fixtureRegistryPath,
+    workspaceRoot: fixtureWorkspaceRoot,
+    usageProvider: () => store.readProjectUsage()
+  });
   await registry.init();
   const planner = new WorkflowPlanner({ definitions: await loadWorkflowDefinitions() });
   const layer = new SupervisorDecisionLayer({ projectRegistry: registry, workflowPlanner: planner });
