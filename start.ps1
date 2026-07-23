@@ -31,7 +31,7 @@ $baseUrl = "http://${hostName}:${port}"
 $dashboardUrl = "$baseUrl/supervisor/"
 
 Write-Host ""
-Write-Host "Supervisor v1.8 Beta" -ForegroundColor Cyan
+Write-Host "Supervisor v1.10 Beta" -ForegroundColor Cyan
 Write-Host "Dashboard: $dashboardUrl" -ForegroundColor Green
 Write-Host "MCP endpoint: $baseUrl/mcp"
 Write-Host "Workspace: $($config.projectRoot)"

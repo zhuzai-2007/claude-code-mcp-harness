@@ -136,37 +136,68 @@ foreach ($entry in @(
     @{ Name = "Execution policy"; Path = (Join-Path $projectRoot ".agents\policy.json"); Advice = "Run .\install.ps1 -TargetProject <path> to install the Harness." },
     @{ Name = "Resource profiles"; Path = (Join-Path $projectRoot ".agents\resource-profiles.json"); Advice = "Restore .agents\resource-profiles.json from the repository." },
     @{ Name = "Workflow definitions"; Path = (Join-Path $projectRoot ".agents\workflow-definitions.json"); Advice = "Restore .agents\workflow-definitions.json from the repository." }
-    @{ Name = "Project registry"; Path = (Join-Path $projectRoot ".agents\projects.json"); Advice = "Restore .agents\projects.json and register local project paths before using Supervisor." }
+    @{ Name = "Release project registry"; Path = (Join-Path $projectRoot ".agents\projects.json"); Advice = "Restore the checked-in .agents\projects.json release registry." }
 )) {
     $result = Get-JsonCheck $entry.Name $entry.Path $entry.Advice
     $checks.Add($(if ($result.PSObject.Properties["check"]) { $result.check } else { $result }))
 }
 
 $projectRegistryPath = Join-Path $projectRoot ".agents\projects.json"
+$localProjectRegistryPath = Join-Path $projectRoot ".agents\projects.local.json"
+if (Test-Path -LiteralPath $localProjectRegistryPath) {
+    $localResult = Get-JsonCheck "Local project registry" $localProjectRegistryPath "Repair .agents\projects.local.json or copy .agents\projects.local.example.json."
+    $checks.Add($(if ($localResult.PSObject.Properties["check"]) { $localResult.check } else { $localResult }))
+} else {
+    $checks.Add((New-Check "Local project registry" "ok" "Not configured (optional)." "Copy .agents\projects.local.example.json only when local Projects are needed." $false))
+}
+
 if (Test-Path -LiteralPath $projectRegistryPath) {
     try {
-        $registry = Get-Content -LiteralPath $projectRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $releaseRegistry = Get-Content -LiteralPath $projectRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $localRegistry = if (Test-Path -LiteralPath $localProjectRegistryPath) {
+            Get-Content -LiteralPath $localProjectRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        } else {
+            [pscustomobject]@{ projects = @() }
+        }
         $projectErrors = [System.Collections.Generic.List[string]]::new()
-        foreach ($project in @($registry.projects)) {
+        $projectIds = @{}
+        $registries = @(
+            [pscustomobject]@{ Name = "release"; Projects = @($releaseRegistry.projects) },
+            [pscustomobject]@{ Name = "local"; Projects = @($localRegistry.projects) }
+        )
+        foreach ($registry in $registries) {
+          foreach ($project in @($registry.Projects)) {
             $registeredId = [string]$(if ($project.projectId) { $project.projectId } else { $project.id })
             $configuredPath = [string]$(if ($project.workspacePath) { $project.workspacePath } else { $project.path })
             $configuredStack = @($(if ($project.stack) { $project.stack } else { $project.techStack }))
             $configuredConstraints = @($(if ($project.constraints) { $project.constraints } else { $project.defaultConstraints }))
             if ([string]::IsNullOrWhiteSpace($registeredId) -or [string]::IsNullOrWhiteSpace($configuredPath) -or [string]::IsNullOrWhiteSpace([string]$project.description)) { $projectErrors.Add("Each project requires projectId, workspacePath, and description.") }
+            if (-not [string]::IsNullOrWhiteSpace($registeredId)) {
+                if ($projectIds.ContainsKey($registeredId)) { $projectErrors.Add("Project id '$registeredId' is duplicated across $($projectIds[$registeredId]) and $($registry.Name) registries.") }
+                else { $projectIds[$registeredId] = $registry.Name }
+            }
             if ($configuredStack.Count -eq 0) { $projectErrors.Add("Project '$registeredId' has no stack.") }
             if (@($project.aliases).Count -eq 0) { $projectErrors.Add("Project '$registeredId' has no aliases.") }
             if ($configuredConstraints.Count -eq 0) { $projectErrors.Add("Project '$registeredId' has no constraints.") }
             try {
+                if ($registry.Name -eq "local" -and [System.IO.Path]::IsPathRooted($configuredPath)) { throw "Local Project paths must be relative." }
                 $registeredPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $configuredPath))
                 $rootExact = $projectRoot.TrimEnd('\')
                 $rootPrefix = "$rootExact\"
                 $insideRoot = $registeredPath.TrimEnd('\').Equals($rootExact, [System.StringComparison]::OrdinalIgnoreCase) -or $registeredPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)
                 if (-not $insideRoot -or -not (Test-Path -LiteralPath $registeredPath -PathType Container)) { $projectErrors.Add("Project '$registeredId' workspacePath is missing or outside projectRoot.") }
-            } catch { $projectErrors.Add("Project '$registeredId' workspacePath is invalid.") }
+                if ($registry.Name -eq "local") {
+                    $workspaceExact = [System.IO.Path]::GetFullPath((Join-Path $projectRoot "workspace")).TrimEnd('\')
+                    $workspacePrefix = "$workspaceExact\"
+                    if (-not $registeredPath.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) { $projectErrors.Add("Local project '$registeredId' must be inside the workspace root.") }
+                }
+            } catch { $projectErrors.Add("Project '$registeredId' workspacePath is invalid: $($_.Exception.Message)") }
+          }
         }
-        $checks.Add((New-Check "Project context contract" $(if ($projectErrors.Count) { "error" } else { "ok" }) $(if ($projectErrors.Count) { ($projectErrors | Select-Object -Unique) -join " " } else { "$(@($registry.projects).Count) registered projects include projectId, workspacePath, stack, aliases, and constraints." }) "Update .agents\projects.json before startup."))
+        $projectCount = @($releaseRegistry.projects).Count + @($localRegistry.projects).Count
+        $checks.Add((New-Check "Project context contract" $(if ($projectErrors.Count) { "error" } else { "ok" }) $(if ($projectErrors.Count) { ($projectErrors | Select-Object -Unique) -join " " } else { "$projectCount release/local projects include unique projectId, safe workspacePath, stack, aliases, and constraints." }) "Update .agents\projects.json or the ignored .agents\projects.local.json before startup."))
     } catch {
-        $checks.Add((New-Check "Project context contract" "error" $_.Exception.Message "Repair .agents\projects.json."))
+        $checks.Add((New-Check "Project context contract" "error" $_.Exception.Message "Repair .agents\projects.json or .agents\projects.local.json."))
     }
 }
 
@@ -239,7 +270,7 @@ if ($Json) {
     $result | ConvertTo-Json -Depth 8
 } else {
     Write-Host ""
-    Write-Host "Supervisor v1.8 Beta doctor" -ForegroundColor Cyan
+    Write-Host "Supervisor v1.10 Beta doctor" -ForegroundColor Cyan
     Write-Host "Repository: $repoRoot"
     Write-Host ""
     foreach ($check in $checks) {

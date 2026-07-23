@@ -19,6 +19,7 @@ export function listWorkflowDefinitionCapabilities(configuration) {
         role: stage.role,
         mode: stage.mode,
         resourceProfile: stage.resourceProfile,
+        resourceProfileOptions: stage.resourceProfilePolicy ? Object.values(stage.resourceProfilePolicy.tiers || {}) : [stage.resourceProfile].filter(Boolean),
         requiresApproval: stage.requiresApproval === true
       })),
       approvalRequirement: { required: approvalStages.length > 0, stages: approvalStages },

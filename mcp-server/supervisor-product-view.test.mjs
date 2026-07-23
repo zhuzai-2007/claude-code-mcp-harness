@@ -7,7 +7,7 @@ const workflow = {
   nextAction: { type: "approve_workflow", reason: "Planner completed the bounded plan." },
   stages: [
     { id: "planning", role: "planner", resourceProfile: "small_readonly" },
-    { id: "implementation", role: "coder", resourceProfile: "large_change", requiresApproval: true },
+    { id: "implementation", role: "coder", resourceProfile: "large_change", resourceSelection: { source: "planner_audit", tier: "large", reasons: ["Broad scope"] }, requiresApproval: true },
     { id: "review", role: "reviewer", resourceProfile: "review_readonly" }
   ],
   approvals: {},
@@ -30,6 +30,7 @@ const tasks = [{
 const product = buildSupervisorProductView(workflow, tasks);
 assert.equal(product.approval.status, "waiting");
 assert.equal(product.approval.resourceProfile, "large_change");
+assert.equal(product.approval.resourceSelection.source, "planner_audit");
 assert.deepEqual(product.approval.contextualFiles, ["app.js"]);
 assert.deepEqual(product.approval.plannedChanges, ["app.js — add export control", "style.css — edit"]);
 assert.deepEqual(product.risks, ["Downloaded JSON may contain user task text.", "Large payload"]);

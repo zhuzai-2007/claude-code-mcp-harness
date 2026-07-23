@@ -5,6 +5,14 @@ const baseWorker = { summary: "fixture completed", files_read: [], proposed_chan
 const event = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const toolUse = (id, name, input) => event({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
 const toolResult = (id, isError = false) => event({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "fixture result", is_error: isError }] } });
+let promptInput = "";
+for await (const chunk of process.stdin) promptInput += chunk;
+const snapshotMatch = promptInput.match(/^-\s*(.+project-context-snapshot\.json)\s*$/m);
+const snapshotPath = snapshotMatch?.[1]?.trim() || path.resolve(".agent-runs", "fixture-project-context-snapshot.json");
+
+if (scenario === "tool-capability-mismatch") {
+  event({ type: "system", subtype: "init", tools: ["Read", "StructuredOutput"] });
+}
 
 let worker = { ...baseWorker };
 let permissionDenials = [];
@@ -37,6 +45,9 @@ switch (scenario) {
   case "plan-with-proposed-changes":
     worker = { summary: "plan prepared from project evidence", files_read: ["README.md"], proposed_changes: ["Update the task board filtering UI in a later approved run."], risks: ["Search behavior must preserve existing filters."], blocked_on: [] };
     toolUse("read-plan-source", "Read", { file_path: path.resolve("README.md") }); toolResult("read-plan-source"); break;
+  case "plan-empty-project-snapshot":
+    worker = { summary: "empty project plan prepared from trusted Runtime inventory", files_read: [snapshotPath], proposed_changes: ["Create the first bounded project files in a later approved run."], risks: ["The project currently has no implementation baseline."], blocked_on: [] };
+    toolUse("read-empty-project-snapshot", "Read", { file_path: snapshotPath }); toolResult("read-empty-project-snapshot"); break;
   case "plan-approval-as-blocker":
     worker = { summary: "plan prepared but approval was misreported as a blocker", files_read: ["README.md"], proposed_changes: ["Apply the approved change later."], risks: [], blocked_on: ["Awaiting human approval before file modifications begin."] };
     toolUse("read-plan-blocker", "Read", { file_path: path.resolve("README.md") }); toolResult("read-plan-blocker"); break;
@@ -64,6 +75,11 @@ switch (scenario) {
   case "run-modified-without-changes":
     worker = { ...worker, summary: "modified result omitted changes", files_read: ["README.md"], changes_made: [], tests_or_checks: ["Read README.md"], run_result: { type: "modified" } };
     toolUse("read-modified-without-changes", "Read", { file_path: path.resolve("README.md") }); toolResult("read-modified-without-changes"); break;
+  case "premature-structured-output":
+    worker = { summary: "placeholder", files_read: [], changes_made: [], commands_run: [], tests_or_checks: [], risks: [], blocked_on: [], run_result: { type: "noop" } };
+    toolUse("audit-too-early", "StructuredOutput", worker); toolResult("audit-too-early");
+    toolUse("edit-after-audit", "Edit", { file_path: path.resolve("workspace/audit-fixture.txt"), old_string: "old", new_string: "new" }); toolResult("edit-after-audit");
+    toolUse("read-after-premature-audit", "Read", { file_path: path.resolve("workspace/audit-fixture.txt") }); toolResult("read-after-premature-audit"); break;
   case "missing-required-field": {
     const { risks: _omittedRisks, ...missingFieldWorker } = worker;
     worker = { ...missingFieldWorker, summary: "required risks field omitted", files_read: ["README.md"], tests_or_checks: ["Read README.md"] };
@@ -75,6 +91,9 @@ switch (scenario) {
   case "dot-directory-read":
     worker = { ...worker, summary: "dot-directory read accepted", files_read: [".agents/policy.json"], tests_or_checks: ["Read .agents/policy.json"] };
     toolUse("read-dot-directory", "Read", { file_path: path.resolve(".agents/policy.json") }); toolResult("read-dot-directory"); break;
+  case "tool-capability-mismatch":
+    worker = { ...worker, summary: "capability mismatch remains diagnosable", files_read: ["README.md"], tests_or_checks: ["Read README.md"] };
+    toolUse("read-capability-fixture", "Read", { file_path: path.resolve("README.md") }); toolResult("read-capability-fixture"); break;
   case "budget-exceeded":
     toolUse("read-before-budget", "Read", { file_path: path.resolve("README.md") }); toolResult("read-before-budget");
     terminalResult = { type: "result", subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($0.2)"], total_cost_usd: 0.2 };

@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { selectPlannerResourceProfile } from "./planner-resource-selection.mjs";
+import { resolveResourceProfile } from "./resource-profiles.mjs";
 
 export const WORKFLOW_ROLE_MODES = Object.freeze({ planner: "plan", coder: "run", reviewer: "review" });
 const TASK_TERMINAL = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
@@ -124,7 +126,7 @@ export class WorkflowRuntime {
     if (!definition) throw new Error(`Unknown Workflow definition: ${selectedId || "<empty>"}`);
     const createdAt = nowIso();
     const workflow = {
-      schemaVersion: 7,
+      schemaVersion: 8,
       workflowId: `workflow_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
       userRequest: request,
       orchestrated: true,
@@ -152,6 +154,9 @@ export class WorkflowRuntime {
         promptKind: stage.promptKind || stage.role,
         requiresApproval: stage.requiresApproval === true,
         resourceProfile: stage.resourceProfile || null,
+        defaultResourceProfile: stage.resourceProfile || null,
+        resourceProfilePolicy: stage.resourceProfilePolicy ? JSON.parse(JSON.stringify(stage.resourceProfilePolicy)) : null,
+        resourceSelection: null,
         status: "pending",
         taskId: null,
         startedAt: null,
@@ -228,7 +233,9 @@ export class WorkflowRuntime {
         approvalReason: String(approvalReason).trim(),
         approvedAt,
         plannerTaskId: planner?.taskId || null,
-        plannerAttemptId: plannerTask?.currentAttempt || null
+        plannerAttemptId: plannerTask?.currentAttempt || null,
+        resourceProfile: stage.resourceProfile || null,
+        resourceSelection: stage.resourceSelection ? JSON.parse(JSON.stringify(stage.resourceSelection)) : null
       };
       stage.status = "pending";
       workflow.status = "planned";
@@ -302,6 +309,8 @@ export class WorkflowRuntime {
             stage.completedAt = task.attempts?.at(-1)?.completedAt || task.updatedAt;
             await this._appendWorkflowEvent(workflow, "workflow.stage_completed", { stageId: stage.id, role: stage.role, taskId: task.taskId });
             if (stage.role === "planner") {
+              const plannerAudit = task.currentAttempt ? await this.resultProvider(task.currentAttempt) : null;
+              await this._applyPlannerResourceSelections(workflow, plannerAudit);
               this._setWorkflowState(workflow, "planned", stage.id, { type: "prepare_approval", stageId: workflow.stages[stage.index + 1]?.id || null });
               await this._appendWorkflowEvent(workflow, "workflow.status_changed", { status: "planned", stageId: stage.id });
             }
@@ -459,6 +468,30 @@ export class WorkflowRuntime {
     const builder = PROMPT_BUILDERS[stage.promptKind];
     if (!builder) throw new Error(`Unsupported Workflow prompt kind: ${stage.promptKind}`);
     return builder({ workflow, stage, audits });
+  }
+
+  async _applyPlannerResourceSelections(workflow, plannerAudit) {
+    for (const target of workflow.stages || []) {
+      if (target.mode !== "run" || target.taskId || target.status !== "pending" || !target.resourceProfilePolicy) continue;
+      const selection = selectPlannerResourceProfile({ audit: plannerAudit, policy: target.resourceProfilePolicy, supervisorDecision: workflow.supervisorDecision });
+      if (!selection) continue;
+      const resolved = resolveResourceProfile(selection.profile);
+      target.resourceProfile = resolved.name;
+      target.resourceSelection = { ...selection, limits: resolved.limits };
+      workflow.workflowPlan.resourceSelections ||= {};
+      workflow.workflowPlan.resourceSelections[target.id] = JSON.parse(JSON.stringify(target.resourceSelection));
+      await this._appendWorkflowEvent(workflow, "workflow.stage_resource_selected", {
+        stageId: target.id,
+        role: target.role,
+        source: target.resourceSelection.source,
+        tier: target.resourceSelection.tier,
+        defaultProfile: target.resourceSelection.defaultProfile,
+        resourceProfile: target.resourceProfile,
+        resourceLimits: resolved.limits,
+        metrics: target.resourceSelection.metrics,
+        reasons: target.resourceSelection.reasons
+      });
+    }
   }
 
   _setWorkflowState(workflow, status, currentStage, nextAction) {

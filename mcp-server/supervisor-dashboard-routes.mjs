@@ -9,6 +9,7 @@ const decisionIdPattern = /^decision_[a-zA-Z0-9_-]+$/;
 const projectIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 const taskStatuses = new Set(["queued", "running", "waiting_approval", "succeeded", "failed", "cancelled", "interrupted"]);
 const workflowStatuses = new Set(["created", "planning", "planned", "waiting_approval", "running", "reviewing", "completed", "failed", "queued", "succeeded"]);
+const terminalWorkflowStatuses = new Set(["completed", "succeeded", "failed"]);
 
 function boundedInteger(value, fallback, maximum) {
   if (value === undefined) return fallback;
@@ -40,7 +41,7 @@ function isLocalConsoleOrigin(req) {
   } catch { return false; }
 }
 
-export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, workflowMetadataStore, dashboardRoot }) {
+export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, supervisorSettings, providerPreflight, taskRunner, workflowMetadataStore, dashboardRoot }) {
   const inspectTask = async (task) => {
     const attempts = (task.attempts || []).map((attempt) => {
       const inspection = taskRunner?.inspectAttempt?.(attempt.attemptId) || { audit: null, recentToolCalls: [], observedChanges: [], artifactFiles: [] };
@@ -71,6 +72,25 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     if (["GET", "HEAD", "OPTIONS"].includes(req.method) || isLocalConsoleOrigin(req)) return next();
     res.status(403).json({ status: "local_console_required", error: "State-changing Supervisor actions require a local Console Origin." });
   });
+
+  app.get("/api/supervisor/settings", route(async (_req, res) => {
+    noStore(res);
+    if (!supervisorSettings) return res.status(503).json({ status: "settings_unavailable", error: "Supervisor settings are unavailable." });
+    res.json({ status: "success", settings: await supervisorSettings.getSettings() });
+  }));
+
+  app.put("/api/supervisor/settings/resources", route(async (req, res) => {
+    noStore(res);
+    if (!supervisorSettings) return res.status(503).json({ status: "settings_unavailable", error: "Supervisor settings are unavailable." });
+    try {
+      res.json({ status: "success", settings: await supervisorSettings.updateResources(req.body) });
+    } catch (error) {
+      if (error?.name === "SupervisorSettingsValidationError") {
+        return res.status(400).json({ status: "invalid_input", error: error.message });
+      }
+      throw error;
+    }
+  }));
 
   app.get("/api/supervisor/workflows", route(async (req, res) => {
     noStore(res);
@@ -127,10 +147,44 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     catch (error) { res.status(404).json({ status: "folder_not_found", error: error.message }); }
   }));
 
-  app.get("/api/supervisor/projects", route(async (_req, res) => {
+  app.get("/api/supervisor/projects", route(async (req, res) => {
     noStore(res);
-    const projects = supervisorService.listProjectViews ? await supervisorService.listProjectViews() : await supervisorService.listProjects();
+    const compact = req.query.compact === "1";
+    const projects = compact || !supervisorService.listProjectViews ? await supervisorService.listProjects() : await supervisorService.listProjectViews();
     res.json({ status: "success", projects });
+  }));
+
+  app.post("/api/supervisor/projects", route(async (req, res) => {
+    noStore(res);
+    const unsupported = Object.keys(req.body || {}).filter((key) => key !== "name");
+    if (unsupported.length) return res.status(400).json({ status: "invalid_input", error: `Unsupported Project field(s): ${unsupported.join(", ")}. Paths are assigned under the managed workspace root.` });
+    let name;
+    try { name = textField(req.body?.name, { name: "name", max: 80 }); }
+    catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    try { res.status(201).json({ status: "success", project: await supervisorService.createProject({ name }) }); }
+    catch (error) { res.status(409).json({ status: "project_conflict", error: error.message }); }
+  }));
+
+  app.patch("/api/supervisor/projects/:projectId", route(async (req, res) => {
+    noStore(res);
+    const { projectId } = req.params;
+    if (!projectIdPattern.test(projectId)) return res.status(400).json({ status: "invalid_input", error: "Invalid projectId." });
+    const body = req.body || {};
+    const unsupported = Object.keys(body).filter((key) => !["name", "pinned", "archived"].includes(key));
+    if (unsupported.length) return res.status(400).json({ status: "invalid_input", error: `Unsupported Project field(s): ${unsupported.join(", ")}. Project paths cannot be changed directly.` });
+    if (!Object.hasOwn(body, "name") && !Object.hasOwn(body, "pinned") && !Object.hasOwn(body, "archived")) return res.status(400).json({ status: "invalid_input", error: "Provide name, pinned, or archived." });
+    const patch = {};
+    if (Object.hasOwn(body, "name")) {
+      try { patch.name = textField(body.name, { name: "name", max: 80 }); }
+      catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    }
+    for (const field of ["pinned", "archived"]) {
+      if (!Object.hasOwn(body, field)) continue;
+      if (typeof body[field] !== "boolean") return res.status(400).json({ status: "invalid_input", error: `${field} must be a boolean.` });
+      patch[field] = body[field];
+    }
+    try { res.json({ status: "success", project: await supervisorService.updateProject(projectId, patch) }); }
+    catch (error) { res.status(/Unknown registered project/i.test(error.message) ? 404 : 409).json({ status: "project_conflict", error: error.message }); }
   }));
 
   app.get("/api/supervisor/projects/:projectId", route(async (req, res) => {
@@ -174,11 +228,13 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     let userRequest;
     try { userRequest = textField(req.body?.userRequest, { name: "userRequest", max: 5000 }); }
     catch (error) { return res.status(400).json({ status: "invalid_input", error: error.message }); }
+    const projectId = String(req.body?.projectId || "").trim();
+    if (!projectIdPattern.test(projectId)) return res.status(400).json({ status: "invalid_input", error: "projectId must identify a registered active Project." });
     let outcome;
     try {
       outcome = await supervisorService.submitRequest({
         userRequest,
-        projectId: req.body?.projectId || null,
+        projectId,
         decisionId: req.body?.decisionId || null,
         clarificationDecisionId: req.body?.clarificationDecisionId || null,
         clarificationResponse: req.body?.clarificationResponse || null,
@@ -269,6 +325,7 @@ export function registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRu
     }
     if (Object.hasOwn(body, "archived")) {
       if (typeof body.archived !== "boolean") return res.status(400).json({ status: "invalid_input", error: "archived must be a boolean." });
+      if (body.archived && !terminalWorkflowStatuses.has(workflow.status)) return res.status(409).json({ status: "archive_conflict", error: "Only completed, succeeded, or failed Workflows can be archived." });
       patch.archived = body.archived;
     }
     if (Object.hasOwn(body, "folderId")) {

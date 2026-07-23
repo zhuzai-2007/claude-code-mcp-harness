@@ -71,6 +71,12 @@ Project Continuity is a read model above Project Context and Project Intelligenc
 
 The Brief is deterministic. Harness-observed changes and saved review evidence are facts; GPT recommendations appear only when they came from an explicitly persisted `SupervisorReviewResult`. Empty recommendation fields are intentional and are never filled from Worker self-report.
 
+### Managed Project Workspace
+
+The Dashboard adds a file-backed management overlay above the checked-in Project Registry. A Project created in the Console receives a stable `projectId`, one direct-child directory under the configured `workspace/` root, and a record in `runtime-data/supervisor-project-registry/projects.json`. Rename changes the display name and managed directory while preserving `projectId` and every Session/Workflow binding. Pin and archive are metadata only.
+
+This layer accepts names, not paths. It never scans or imports unregistered directories, never creates an arbitrary absolute path, and treats project-root/system entries as unmanaged. An archived Project stays registered and readable but cannot create a Workflow. Existing Registry entries remain the base layer; runtime records are merged by `projectId`, so legacy installations need no eager migration.
+
 ### Project Health projection
 
 The Dashboard projects a compact Project Health view from the Project Brief, recent Workflow statuses, persisted Review Results, Project Memory metadata, and the checked-in release-status record. It shows current status, recent evidence, attention items, confirmed recommendations, and release readiness. This is deterministic presentation logic: it does not ask a model to judge health, does not move Workflow state, and does not turn Worker self-report into project direction.
@@ -92,7 +98,7 @@ Runtime state is file-backed under the configured runtime data root:
 - Supervisor Decisions, Supervisor Sessions, and derived Project Briefs;
 - Workflows, Tasks, Attempts, and events;
 - Review Packages, Supervisor Review Results, Memory Update Proposals, and Memory application history;
-- Dashboard-only naming, folders, and archive metadata.
+- Dashboard-only Workflow display/archive metadata and the managed Project Registry overlay.
 
 Project source remains in the registered workspace. `PROJECT_MEMORY.md` remains operator-owned: only an explicit confirmed apply can append a stored proposal, and every apply leaves a separate audit record.
 

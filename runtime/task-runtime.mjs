@@ -326,6 +326,11 @@ export class TaskRuntime {
     const initial = await this.store.readTask(taskId);
     if (!initial || initial.status !== "queued") return;
     const attemptId = this.runner.generateAttemptId();
+    const preparedAttemptContext = await this.runner.prepareAttemptContext?.({
+      attemptId,
+      mode: initial.mode,
+      projectContext: initial.projectContext
+    }) || null;
     const startedAt = nowIso();
     const runningTask = await this._mutate(taskId, async (task, emit) => {
       if (task.status !== "queued") throw new Error(`Task cannot start from status ${task.status}`);
@@ -345,6 +350,7 @@ export class TaskRuntime {
         resourceProfile: task.settings.resourceProfile,
         resourceLimits: task.settings.resourceLimits,
         projectContext: task.projectContext || null,
+        projectContextSnapshot: preparedAttemptContext?.metadata || null,
         projectId: task.projectId || null,
         workspacePath: task.workspacePath || null,
         executionDirectory: task.executionDirectory || String(this.runner.projectRoot || "").replaceAll("\\", "/") || null,
@@ -391,6 +397,8 @@ export class TaskRuntime {
         maxCommands: runningTask.settings.maxCommands,
         mockWorker: runningTask.settings.mockWorker,
         approval: runningTask.approval,
+        projectContext: runningTask.projectContext,
+        preparedAttemptContext,
         signal: controller.signal,
         onSpawn: ({ pid }) => this._workerSpawned(taskId, attemptId, pid).catch(() => {})
       });

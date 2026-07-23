@@ -108,7 +108,7 @@ Intent/Workflow mismatches are rejected locally. A `conversation` Decision canno
 
 ## Project registry
 
-Edit `.agents/projects.json` before use. Schema v3 uses `projectId`, `name`, `workspacePath`, `aliases`, `stack`, and `constraints`; the Registry still accepts the earlier `id/path/techStack/defaultConstraints` names. Registry `workspacePath` values remain relative to configured `projectRoot`; Runtime resolves and freezes the absolute path in each new Decision and Workflow. Missing directories and paths that escape `projectRoot` are rejected. `lastUsed` remains in `runtime-data/project-usage.json`.
+`.agents/projects.json` contains release-safe Projects. For machine-local Projects, copy `.agents/projects.local.example.json` to ignored `.agents/projects.local.json`; do not add personal paths to the release registry. Runtime loads release definitions, local definitions, then its persisted metadata overlay. Schema v3 uses `projectId`, `name`, `workspacePath`, `aliases`, `stack`, and `constraints`; the Registry still accepts the earlier `id/path/techStack/defaultConstraints` names. Release/local `projectId` collisions are rejected. Local paths must be relative and resolve inside `workspace/`; all Registry paths are resolved and frozen in each new Decision and Workflow. Missing directories and paths that escape the allowed root are rejected.
 
 Selection order is:
 

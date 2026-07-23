@@ -40,7 +40,38 @@ export function groupWorkflows(workflows, now = new Date()) {
 }
 
 function newestFirst(left, right) {
-  return new Date(right.updatedAt || right.createdAt || 0) - new Date(left.updatedAt || left.createdAt || 0);
+  return new Date(right.createdAt || right.updatedAt || 0) - new Date(left.createdAt || left.updatedAt || 0);
+}
+
+function workflowProjectId(workflow) {
+  return workflow?.projectId || workflow?.project?.projectId || workflow?.project?.id || workflow?.product?.projectId || null;
+}
+
+export function groupProjects(projects) {
+  const compare = (left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
+    || new Date(right.lastUsed || right.updatedAt || right.createdAt || 0) - new Date(left.lastUsed || left.updatedAt || left.createdAt || 0)
+    || String(left.name || left.projectId).localeCompare(String(right.name || right.projectId));
+  const active = [];
+  const archived = [];
+  for (const project of projects || []) (project.archived ? archived : active).push(project);
+  active.sort(compare);
+  archived.sort(compare);
+  return { active, archived };
+}
+
+export function workflowsForProjectScope(workflows, { scope = "project", projectId = null } = {}) {
+  if (scope === "global_archive") return (workflows || []).filter((workflow) => workflow.metadata?.archived).sort(newestFirst);
+  if (!projectId) return [];
+  return (workflows || []).filter((workflow) => workflowProjectId(workflow) === projectId).sort(newestFirst);
+}
+
+export function groupProjectWorkflows(workflows) {
+  const active = [];
+  const archived = [];
+  for (const workflow of workflows || []) (workflow.metadata?.archived ? archived : active).push(workflow);
+  active.sort(newestFirst);
+  archived.sort(newestFirst);
+  return { active, archived };
 }
 
 export function groupWorkflowsByFolder(workflows, folders) {

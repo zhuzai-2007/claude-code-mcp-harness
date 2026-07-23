@@ -39,7 +39,7 @@ const workflowRuntime = {
   async approveWorkflow(workflowId, approval) { calls.push(["approveWorkflow", workflowId, approval]); return { ...workflow, workflowId, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 }, status: "running", approvals: { implementation: { ...approval, approvedAt: task.createdAt } } }; },
   async rejectWorkflow(workflowId, rejection) { calls.push(["rejectWorkflow", workflowId, rejection]); return { ...workflow, workflowId, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 }, status: "failed", approvals: {}, failure: { error: { code: "approval_rejected", message: rejection.rejectionReason } }, rejections: { implementation: { ...rejection, rejectedAt: task.createdAt } } }; },
   async retryWorkflow(workflowId, recovery) { calls.push(["retryWorkflow", workflowId, recovery]); return { sourceWorkflow: { ...workflow, workflowId, status: "failed", orchestrated: true, failure: { failedStage: "planning", role: "planner", error: { code: "worker_crash", message: "ConnectionRefused" } }, recoveries: [{ workflowId: "workflow_recovered_test" }] }, workflow: { ...workflow, workflowId: "workflow_recovered_test", status: "planning", approvals: {}, rejections: {}, recovery: { sourceWorkflowId: workflowId }, tasks: [], counts: { total: 0, succeeded: 0, running: 0, failed: 0 } } }; },
-  async getWorkflow(workflowId) { calls.push(["getWorkflow", workflowId]); return [workflow.workflowId, "workflow_created_test", "workflow_waiting_test"].includes(workflowId) ? { ...workflow, workflowId } : null; },
+  async getWorkflow(workflowId) { calls.push(["getWorkflow", workflowId]); if (workflowId === "workflow_running_test") return { ...workflow, workflowId, status: "running" }; return [workflow.workflowId, "workflow_created_test", "workflow_waiting_test"].includes(workflowId) ? { ...workflow, workflowId } : null; },
   async getWorkflowEvents(workflowId, options) { calls.push(["workflowEvents", workflowId, options]); return workflowId === workflow.workflowId ? { workflowId, events, lastSequence: 2, hasMore: false } : null; }
 };
 const providerPreflight = {
@@ -48,16 +48,19 @@ const providerPreflight = {
   async getLatest() { calls.push(["getPreflight"]); return this.latest; },
   async run(options) { calls.push(["runPreflight", options]); this.latest = this.next; return this.latest; }
 };
+let projectState = { projectId: "board", id: "board", name: "Task Board", workspacePath: "D:/registered/workspace/board", path: "workspace/board", description: "Board", language: "JavaScript", memory: { available: true, lastUpdated: task.updatedAt }, managed: true, pinned: false, archived: false, lastUsed: null };
 const supervisorService = {
   async submitRequest(options) {
     calls.push(["submitRequest", options]);
     const created = await workflowRuntime.createWorkflow(options);
     return { status: "success", decision: workflow.supervisorDecision, workflow: created };
   },
-  async listProjects() { calls.push(["listProjects"]); return [{ projectId: "board", id: "board", name: "Task Board", workspacePath: "D:/registered/workspace/board", path: "workspace/board", description: "Board", language: "JavaScript", memory: { available: true, lastUpdated: task.updatedAt }, lastUsed: null }]; },
-  async listProjectViews() { calls.push(["listProjectViews"]); return [{ projectId: "board", id: "board", name: "Task Board", workspacePath: "D:/registered/workspace/board", path: "workspace/board", memory: { available: true, lastUpdated: task.updatedAt }, sessionCount: 1, workflowCount: 1, sessions: [workflow.session], recentWorkflows: [{ workflowId: workflow.workflowId, sessionId: workflow.sessionId, userRequest: workflow.userRequest, status: workflow.status, updatedAt: workflow.updatedAt }] }]; },
+  async listProjects() { calls.push(["listProjects"]); return [{ ...projectState }]; },
+  async listProjectViews() { calls.push(["listProjectViews"]); return [{ ...projectState, sessionCount: 1, workflowCount: 1, sessions: [workflow.session], recentWorkflows: [{ workflowId: workflow.workflowId, sessionId: workflow.sessionId, userRequest: workflow.userRequest, status: workflow.status, updatedAt: workflow.updatedAt }] }]; },
+  async createProject(input) { calls.push(["createProject", input]); return { projectId: "new-board", name: input.name, workspacePath: "D:/registered/workspace/new-board", path: "workspace/new-board", managed: true, pinned: false, archived: false }; },
+  async updateProject(projectId, patch) { calls.push(["updateProject", projectId, patch]); projectState = { ...projectState, ...patch, projectId, id: projectId, ...(patch.name ? { workspacePath: "D:/registered/workspace/renamed-board", path: "workspace/renamed-board" } : {}) }; return { ...projectState }; },
   async getProjectContext(projectId) { calls.push(["getProjectContext", projectId]); if (projectId !== "board") throw new Error("Unknown registered project"); return { project: { projectId: "board", name: "Task Board", workspacePath: "D:/registered/workspace/board" }, supervisorInstructions: "Board instructions", projectMemory: "Board memory", memory: { available: true, lastUpdated: task.updatedAt }, sessions: [workflow.session] }; },
-  async getProjectContinuity(projectId) { calls.push(["getProjectContinuity", projectId]); if (projectId !== "board") throw new Error("Unknown registered project"); return { schemaVersion: 1, project: { projectId: "board", name: "Task Board", description: "Board" }, brief: { projectId: "board", currentStatus: "idle", activeGoals: [], recentChanges: [{ workflowId: workflow.workflowId, change: { file: "app.js" } }], recentWorkflowSummary: [{ workflowId: workflow.workflowId, status: "completed", goal: "Add search" }], unresolvedIssues: [], recommendedNextSteps: [], generatedFrom: [{ type: "workflow", id: workflow.workflowId }], updatedAt: task.updatedAt }, health: { status: "healthy", recent: [{ workflowId: workflow.workflowId, status: "completed", goal: "Add search" }], attention: ["GPT Web validation pending"], recommended: ["Run the documented validation"], release: { version: "1.8.0-beta.1", readiness: "pending_gpt_web_validation" }, generatedFrom: [{ type: "workflow", id: workflow.workflowId }, { type: "release_status", id: "1.8.0-beta.1" }] }, memorySummary: { available: true, summary: "Board memory", lastUpdated: task.updatedAt }, sessions: [{ ...workflow.session, purpose: "Add search", decisions: [], unresolvedQuestions: [], nextActions: [], relatedWorkflows: [workflow.workflowId] }], recentWorkflows: [{ workflowId: workflow.workflowId, goal: "Add search", status: "completed", updatedAt: task.updatedAt }], openIssues: [], waitingClarifications: [] }; },
+  async getProjectContinuity(projectId) { calls.push(["getProjectContinuity", projectId]); if (projectId !== "board") throw new Error("Unknown registered project"); return { schemaVersion: 1, project: { projectId: "board", name: "Task Board", description: "Board" }, brief: { projectId: "board", currentStatus: "idle", activeGoals: [], recentChanges: [{ workflowId: workflow.workflowId, change: { file: "app.js" } }], recentWorkflowSummary: [{ workflowId: workflow.workflowId, status: "completed", goal: "Add search" }], unresolvedIssues: [], recommendedNextSteps: [], generatedFrom: [{ type: "workflow", id: workflow.workflowId }], updatedAt: task.updatedAt }, health: { status: "healthy", recent: [{ workflowId: workflow.workflowId, status: "completed", goal: "Add search" }], attention: ["GPT Web validation pending"], recommended: ["Run the documented validation"], release: { version: "1.10.0-beta.1", readiness: "pending_gpt_web_validation" }, generatedFrom: [{ type: "workflow", id: workflow.workflowId }, { type: "release_status", id: "1.10.0-beta.1" }] }, memorySummary: { available: true, summary: "Board memory", lastUpdated: task.updatedAt }, sessions: [{ ...workflow.session, purpose: "Add search", decisions: [], unresolvedQuestions: [], nextActions: [], relatedWorkflows: [workflow.workflowId] }], recentWorkflows: [{ workflowId: workflow.workflowId, goal: "Add search", status: "completed", updatedAt: task.updatedAt }], openIssues: [], waitingClarifications: [] }; },
   async getDecision(decisionId) { calls.push(["getDecision", decisionId]); return decisionId === "decision_dashboard_test" ? workflow.supervisorDecision : null; },
   async getWorkflowReviewPackage(workflowId) { calls.push(["getWorkflowReviewPackage", workflowId]); return workflowId === workflow.workflowId ? { schemaVersion: 2, packageId: `review_package_${workflowId}`, workflowId, originalRequest: workflow.userRequest, reviewerResult: { summary: "Review passed" }, auditEvidence: { stages: [{ role: "reviewer" }] }, memorySnapshot: { digest: "memory-fixture" }, goalAlignment: "Goal met", architectureImpact: "Bounded", futureRecommendations: ["Keep checks"], memoryUpdateNeeded: true, supervisorReviewResult: { reviewId: "supervisor_review_dashboard", conclusion: "accept" }, chatGptReviewGuidance: { status: "available", workflowId, projectId: "board", supervisorReviewStatus: "accept", reviewPackageTool: { name: "cc_get_supervisor_review_package", arguments: { workflowId } }, suggestedPrompts: { en: "Review this Workflow", zhCN: "审查此 Workflow" } }, memoryUpdateProposal: { proposalId: `memory_proposal_${workflowId}`, status: "proposed", workflowId, projectId: "board", requiresConfirmation: true, applied: false } } : null; },
   async getWorkflowProjectIntelligence(workflowId) { calls.push(["getWorkflowProjectIntelligence", workflowId]); return workflowId === workflow.workflowId ? { schemaVersion: 1, workflowId, projectId: "board", reviewResults: [{ reviewId: "supervisor_review_dashboard", conclusion: "accept", goalAlignment: "Goal met", source: { submittedBy: "operator" }, createdAt: task.updatedAt }], latestReview: { reviewId: "supervisor_review_dashboard", conclusion: "accept" }, memoryProposal: { proposalId: `memory_proposal_${workflowId}`, status: "proposed", applied: false, summary: "Add search", affectedAreas: ["app.js"] }, memoryApplications: [], latestMemoryApplication: null } : null; },
@@ -86,7 +89,7 @@ try {
   assert.equal(workflowList.status, 200);
   const listedWorkflow = (await workflowList.json()).workflows[0];
   assert.equal(listedWorkflow.workflowId, workflow.workflowId);
-  assert.deepEqual(listedWorkflow.metadata, { schemaVersion: 1, workflowId: workflow.workflowId, displayName: null, archived: false, folderId: "default", updatedAt: null });
+  assert.deepEqual(listedWorkflow.metadata, { schemaVersion: 2, workflowId: workflow.workflowId, displayName: null, archived: false, archivedAt: null, folderId: "default", updatedAt: null });
 
   const localHeaders = { "content-type": "application/json", origin: base };
   const initialFolders = (await (await fetch(`${base}/api/supervisor/folders`)).json()).folders;
@@ -107,6 +110,31 @@ try {
   const projectView = (await projectsResponse.json()).projects[0];
   assert.equal(projectView.projectId, "board");
   assert.equal(projectView.sessions[0].sessionId, "session_board_test");
+  const compactProjectsResponse = await fetch(`${base}/api/supervisor/projects?compact=1`);
+  const compactProject = (await compactProjectsResponse.json()).projects[0];
+  assert.equal(compactProject.projectId, "board");
+  assert.equal(Object.hasOwn(compactProject, "sessions"), false, "Dashboard polling must avoid the expensive Project Session/Workflow projection");
+  const forbiddenPathProject = await fetch(`${base}/api/supervisor/projects`, { method: "POST", headers: localHeaders, body: JSON.stringify({ name: "Unsafe Board", workspacePath: "D:/forbidden" }) });
+  assert.equal(forbiddenPathProject.status, 400, "Dashboard Project creation must reject caller-supplied paths");
+  const createProjectResponse = await fetch(`${base}/api/supervisor/projects`, { method: "POST", headers: localHeaders, body: JSON.stringify({ name: "New Board" }) });
+  assert.equal(createProjectResponse.status, 201);
+  const createdProject = (await createProjectResponse.json()).project;
+  assert.equal(createdProject.projectId, "new-board");
+  assert.equal(createdProject.path, "workspace/new-board", "Dashboard Project creation must not accept an arbitrary path");
+  const renameProjectResponse = await fetch(`${base}/api/supervisor/projects/board`, { method: "PATCH", headers: localHeaders, body: JSON.stringify({ name: "Renamed Board" }) });
+  assert.equal(renameProjectResponse.status, 200);
+  assert.equal((await renameProjectResponse.json()).project.projectId, "board", "Project rename must preserve projectId");
+  const archiveProjectResponse = await fetch(`${base}/api/supervisor/projects/board`, { method: "PATCH", headers: localHeaders, body: JSON.stringify({ archived: true, pinned: true }) });
+  assert.equal(archiveProjectResponse.status, 200);
+  assert.equal((await archiveProjectResponse.json()).project.archived, true);
+  const archivedProjectList = (await (await fetch(`${base}/api/supervisor/projects?compact=1`)).json()).projects;
+  assert.equal(archivedProjectList.find((project) => project.projectId === "board")?.archived, true, "archived Projects must remain discoverable in the Project list");
+  const restoreProjectResponse = await fetch(`${base}/api/supervisor/projects/board`, { method: "PATCH", headers: localHeaders, body: JSON.stringify({ archived: false }) });
+  assert.equal(restoreProjectResponse.status, 200);
+  assert.equal((await restoreProjectResponse.json()).project.archived, false);
+  const restoredProjectList = (await (await fetch(`${base}/api/supervisor/projects?compact=1`)).json()).projects;
+  assert.equal(restoredProjectList.find((project) => project.projectId === "board")?.archived, false, "restored Projects must return to the active Project list");
+  assert.equal((await fetch(`${base}/api/supervisor/projects`, { method: "POST", headers: { "content-type": "application/json", origin: "https://chatgpt.com" }, body: JSON.stringify({ name: "Remote" }) })).status, 403);
   const projectContextResponse = await fetch(`${base}/api/supervisor/projects/board`);
   const projectContext = (await projectContextResponse.json()).context;
   assert.equal(projectContext.project.workspacePath, "D:/registered/workspace/board");
@@ -116,7 +144,7 @@ try {
   const continuity = (await continuityResponse.json()).context;
   assert.equal(continuity.brief.projectId, "board");
   assert.equal(continuity.health.status, "healthy");
-  assert.equal(continuity.health.release.version, "1.8.0-beta.1");
+  assert.equal(continuity.health.release.version, "1.10.0-beta.1");
   assert.deepEqual(continuity.health.attention, ["GPT Web validation pending"]);
   assert.equal(continuity.sessions[0].purpose, "Add search");
   assert.equal((await fetch(`${base}/api/supervisor/projects/not%20valid`)).status, 400);
@@ -128,7 +156,7 @@ try {
   const failedPreflightResponse = await fetch(`${base}/api/supervisor/provider-preflight`, { method: "POST", headers: localHeaders, body: JSON.stringify({ timeoutSeconds: 30 }) });
   assert.equal(failedPreflightResponse.status, 503);
   assert.equal((await failedPreflightResponse.json()).result.classification, "provider_timeout");
-  const createdResponse = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: localHeaders, body: JSON.stringify({ userRequest: "给任务看板增加导出 JSON 功能" }) });
+  const createdResponse = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: localHeaders, body: JSON.stringify({ userRequest: "给任务看板增加导出 JSON 功能", projectId: "board" }) });
   assert.equal(createdResponse.status, 201);
   const createdWorkflow = (await createdResponse.json()).workflow;
   assert.equal(createdWorkflow.userRequest, "给任务看板增加导出 JSON 功能");
@@ -150,6 +178,8 @@ try {
 
   const invalidCreate = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: localHeaders, body: JSON.stringify({ userRequest: "" }) });
   assert.equal(invalidCreate.status, 400);
+  const unboundCreate = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: localHeaders, body: JSON.stringify({ userRequest: "must bind a Project" }) });
+  assert.equal(unboundCreate.status, 400, "Dashboard Workflow creation must bind a registered Project explicitly");
   const remoteCreate = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: { "content-type": "application/json", origin: "https://chatgpt.com" }, body: JSON.stringify({ userRequest: "must not start" }) });
   assert.equal(remoteCreate.status, 403);
   const missingOriginCreate = await fetch(`${base}/api/supervisor/workflows`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userRequest: "must not start" }) });
@@ -162,6 +192,8 @@ try {
   const savedMetadata = (await metadataResponse.json()).metadata;
   assert.equal(savedMetadata.displayName, "Search feature");
   assert.equal(savedMetadata.archived, true);
+  assert.equal(savedMetadata.schemaVersion, 2);
+  assert.match(savedMetadata.archivedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, "archive time must be a current ISO timestamp");
   assert.equal(savedMetadata.folderId, createdFolder.folderId);
   assert.equal(JSON.stringify(workflow), workflowBeforeMetadata, "metadata must not mutate Workflow state");
   assert.equal(JSON.stringify(events), eventsBeforeMetadata, "metadata must not mutate Workflow events");
@@ -172,6 +204,8 @@ try {
   assert.equal(invalidMetadata.status, 400);
   const invalidFolderMetadata = await fetch(`${base}/api/supervisor/workflows/${workflow.workflowId}/metadata`, { method: "PATCH", headers: localHeaders, body: JSON.stringify({ folderId: "folder_missing" }) });
   assert.equal(invalidFolderMetadata.status, 400);
+  const activeArchive = await fetch(`${base}/api/supervisor/workflows/workflow_running_test/metadata`, { method: "PATCH", headers: localHeaders, body: JSON.stringify({ archived: true }) });
+  assert.equal(activeArchive.status, 409, "active Workflows cannot be archived");
 
   const workflowDetail = await fetch(`${base}/api/supervisor/workflows/${workflow.workflowId}`);
   const detailedWorkflow = (await workflowDetail.json()).workflow;
@@ -239,18 +273,20 @@ try {
   const dashboard = await fetch(`${base}/supervisor/`);
   assert.equal(dashboard.status, 200);
   const dashboardHtml = await dashboard.text();
-  for (const marker of ["language-switch", "local-entry", "overview-disclosure", "hide-recent", "show-recent", "create-folder", "project-browser", "project-list", "project-summary", "project-overview", "project-overview-content", "artifact-center", "new-task-form", "project-confirmation", "workflow-navigation", "workflow-summary-pane", "workflow-timeline-pane", "stage-timeline", "stage-plan", "stage-approval", "stage-implementation", "stage-review", "decision-panel", "approval-panel", "recovery-panel", "workflow-metadata-dialog", "metadata-folder", "folder-dialog", "Approve and run", "Technical details"]) assert.match(dashboardHtml, new RegExp(marker));
+  for (const marker of ["theme-switch", "language-switch", "local-entry", "entry-project-select", "overview-disclosure", "workspace-panel", "create-project", "active-project-list", "archived-project-list", "global-archived-workflows", "project-summary", "project-overview", "project-overview-content", "artifact-center", "new-task-form", "project-dialog", "project-dialog-message", "workflow-metadata-message", "workflow-navigation", "workflow-summary-pane", "workflow-timeline-pane", "stage-timeline", "stage-plan", "stage-approval", "stage-implementation", "stage-review", "decision-panel", "approval-panel", "recovery-panel", "workflow-metadata-dialog", "Approve and run", "Technical details"]) assert.match(dashboardHtml, new RegExp(marker));
+  assert.doesNotMatch(dashboardHtml, /legacy-workflows|Legacy \/ Unassigned/, "Dashboard must not expose the removed pre-Project test history group");
   assert.doesNotMatch(dashboardHtml, /<details id="local-entry"[^>]*\sopen(?:\s|>)/, "Local fallback entry must be collapsed by default");
   assert.doesNotMatch(dashboardHtml, /<details id="overview-disclosure"[^>]*\sopen(?:\s|>)/, "Overall status must be collapsed by default");
   const dashboardScript = await fetch(`${base}/supervisor/app.js`);
   const dashboardSource = await dashboardScript.text();
-  for (const marker of ["provider-preflight", "failure.category", "recoverySteps", "workflowType", "supervisorDecision", "technicalSummary", "estimatedResources", "recommendedActions", "project_confirmation_required", "implementation.diff", "implementation.files", "review.title", "review.errors", "totalCostUsd", "totalUsage", "renderProjects", "renderProjectOverview", "renderArtifactCenter", "clarification-form", "projectId", "workspacePath", "sessionId", "stageIcon", "applyRecentVisibility", "applyHeroView", "groupWorkflowsByFolder", "/projects", "/continuity", "/artifacts", "/folders", "/approve", "/reject", "/retry", "/metadata", "PATCH", "DELETE"]) assert.match(dashboardSource, new RegExp(marker));
+  for (const marker of ["provider-preflight", "failure.category", "recoverySteps", "workflowType", "supervisorDecision", "technicalSummary", "estimatedResources", "recommendedActions", "implementation.diff", "implementation.files", "review.title", "review.errors", "totalCostUsd", "totalUsage", "renderProjects", "renderProjectOverview", "renderArtifactCenter", "clarification-form", "projectId", "workspacePath", "sessionId", "stageIcon", "applyHeroView", "groupProjectWorkflows", "workflowsForProjectScope", "expandedProjectIds", "runDialogMutation", "refreshGeneration", "fetchDashboardJson", "/projects", "/continuity", "/artifacts", "/approve", "/reject", "/retry", "/metadata", "PATCH"]) assert.match(dashboardSource, new RegExp(marker));
   assert.match(dashboardSource, /sentenceLabel\(result\.classification\)/, "Provider failure heading should use a sentence-cased label");
   assert.doesNotMatch(dashboardSource, /Provider: \$\{statusLabel/, "Provider failure heading should not repeat the Provider label");
   assert.equal((await fetch(`${base}/supervisor/refresh-policy.mjs`)).status, 200);
+  assert.equal((await fetch(`${base}/supervisor/dashboard-request.mjs`)).status, 200, "Dashboard request helper must be served to browsers");
   assert.equal(refreshDelay(true), 1000, "Running work must refresh at least once per second");
   assert.equal(refreshDelay(false), 4000, "Idle refresh should back off to 3-5 seconds");
-  assert(calls.every(([operation]) => ["listTasks", "getTask", "taskEvents", "listWorkflows", "createWorkflow", "approveWorkflow", "rejectWorkflow", "retryWorkflow", "getWorkflow", "workflowEvents", "submitRequest", "listProjects", "listProjectViews", "getProjectContext", "getProjectContinuity", "getDecision", "getWorkflowReviewPackage", "getWorkflowProjectIntelligence", "getWorkflowArtifactCenter", "applyMemoryProposal", "getPreflight", "runPreflight"].includes(operation)));
+  assert(calls.every(([operation]) => ["listTasks", "getTask", "taskEvents", "listWorkflows", "createWorkflow", "approveWorkflow", "rejectWorkflow", "retryWorkflow", "getWorkflow", "workflowEvents", "submitRequest", "listProjects", "listProjectViews", "createProject", "updateProject", "getProjectContext", "getProjectContinuity", "getDecision", "getWorkflowReviewPackage", "getWorkflowProjectIntelligence", "getWorkflowArtifactCenter", "applyMemoryProposal", "getPreflight", "runPreflight"].includes(operation)));
   console.log(JSON.stringify({ ok: true, routes: ["project-list", "project-context", "provider-preflight", "workflow-create", "workflow-approve", "workflow-reject", "workflow-retry", "workflow-metadata", "review-package", "project-intelligence", "memory-proposal-apply", "folder-list", "folder-create", "folder-update", "folder-delete", "workflow-list", "workflow-detail", "workflow-events", "task-list", "task-detail", "artifact", "static"], refresh: { activeMs: refreshDelay(true), idleMs: refreshDelay(false) } }, null, 2));
 } finally {
   await new Promise((resolve) => server.close(resolve));

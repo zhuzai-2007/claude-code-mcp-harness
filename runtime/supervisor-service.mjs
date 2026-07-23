@@ -1,11 +1,12 @@
 export class SupervisorService {
-  constructor({ decisionLayer, store, workflowRuntime, reviewPackageService = null, projectIntelligenceService = null, projectContinuityService = null }) {
+  constructor({ decisionLayer, store, workflowRuntime, reviewPackageService = null, projectIntelligenceService = null, projectContinuityService = null, projectWorkspaceService = null }) {
     this.decisionLayer = decisionLayer;
     this.store = store;
     this.workflowRuntime = workflowRuntime;
     this.reviewPackageService = reviewPackageService;
     this.projectIntelligenceService = projectIntelligenceService;
     this.projectContinuityService = projectContinuityService;
+    this.projectWorkspaceService = projectWorkspaceService;
   }
 
   async start() { await this.store.init(); }
@@ -64,6 +65,23 @@ export class SupervisorService {
   }
 
   async listProjects() { return this.decisionLayer.projectRegistry.listProjects(); }
+  async createProject(input) {
+    if (!this.projectWorkspaceService) throw new Error("Project workspace management is unavailable.");
+    return this.projectWorkspaceService.createProject(input);
+  }
+  async updateProject(projectId, patch) {
+    if (!this.projectWorkspaceService) throw new Error("Project workspace management is unavailable.");
+    if (Object.hasOwn(patch, "name") || patch.archived === true) {
+      const activeStatuses = new Set(["created", "queued", "planning", "planned", "waiting_approval", "running", "reviewing"]);
+      const workflows = await this.workflowRuntime.listWorkflows({ limit: 200 });
+      const active = workflows.filter((workflow) => (workflow.projectId || workflow.project?.projectId || workflow.project?.id) === projectId && activeStatuses.has(workflow.status));
+      if (active.length) throw new Error(`Project has ${active.length} active Workflow(s); rename or archive is not allowed.`);
+    }
+    let project = this.decisionLayer.projectRegistry.getProjectContext(projectId).project;
+    if (Object.hasOwn(patch, "name")) project = await this.projectWorkspaceService.renameProject(projectId, { name: patch.name });
+    if (Object.hasOwn(patch, "archived") || Object.hasOwn(patch, "pinned")) project = await this.projectWorkspaceService.updateProjectMetadata(projectId, patch);
+    return project;
+  }
   async getProjectContext(project) {
     const context = this.decisionLayer.projectRegistry.getProjectContext(project);
     return { ...context, sessions: await this.store.listSessions({ projectId: context.project.projectId }) };

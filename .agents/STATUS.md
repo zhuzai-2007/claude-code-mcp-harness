@@ -1,8 +1,8 @@
 # Worker Harness Status
 
-Product version: v1.8.0-beta.1
+Product version: v1.10.0-beta.1
 
-Status: v1.8-beta release candidate for single-user, operator-controlled local use. Automated, mock, and local non-paid gates pass; the documented fresh-session ChatGPT Web validation remains required before public Beta.
+Status: v1.10-beta release candidate for single-user, operator-controlled local use. Automated, mock, and local non-paid gates pass; the documented fresh-session ChatGPT Web validation remains required before public Beta.
 
 ## Current Capabilities
 

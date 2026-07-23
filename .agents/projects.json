@@ -17,21 +17,6 @@
       ]
     },
     {
-      "projectId": "dogfood-study-board",
-      "name": "Dogfood Study Board",
-      "workspacePath": "workspace/dogfood-study-board",
-      "description": "A small browser task board used for bounded feature-change dogfood.",
-      "language": "HTML, CSS, JavaScript",
-      "stack": ["Static HTML", "CSS", "Browser JavaScript", "localStorage"],
-      "lastUsed": null,
-      "aliases": ["任务看板", "study board", "dogfood study board"],
-      "constraints": [
-        "Keep the application dependency-free and browser-only.",
-        "Preserve existing task data and localStorage behavior unless the request explicitly changes it.",
-        "Limit changes to the registered task-board directory."
-      ]
-    },
-    {
       "projectId": "supervisor-dashboard",
       "name": "Supervisor Dashboard",
       "workspacePath": "workspace/supervisor-dashboard",

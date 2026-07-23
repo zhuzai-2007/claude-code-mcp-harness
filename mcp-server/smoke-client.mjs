@@ -71,17 +71,17 @@ try {
   assert(createWorkflowTool?.inputSchema?.properties?.clarificationDecisionId && createWorkflowTool?.inputSchema?.properties?.clarificationResponse, "cc_create_workflow omitted the clarification regeneration inputs");
   assert(createWorkflowTool?.inputSchema?.properties?.supervisorSession, "cc_create_workflow omitted additive Supervisor Session context");
   const registeredProjects = await client.callTool({ name: "cc_list_projects", arguments: {} });
-  const registeredBoard = registeredProjects.structuredContent?.projects?.find((project) => project.id === "dogfood-study-board");
-  assert(registeredBoard, "cc_list_projects omitted the registered dogfood project");
-  assert(registeredBoard.techStack?.includes("localStorage") && registeredBoard.aliases?.includes("任务看板") && registeredBoard.defaultConstraints?.length, "cc_list_projects omitted v0.7 Project Context fields");
-  assert(registeredBoard.supervisorContext?.available === true, "cc_list_projects omitted Supervisor Context availability");
+  const registeredBoard = registeredProjects.structuredContent?.projects?.find((project) => project.id === "supervisor-dashboard");
+  assert(registeredBoard, "cc_list_projects omitted the release-safe Supervisor Dashboard project");
+  assert(registeredBoard.techStack?.includes("Local REST API") && registeredBoard.aliases?.includes("审批中心") && registeredBoard.defaultConstraints?.length, "cc_list_projects omitted Project Context fields");
+  assert(typeof registeredBoard.supervisorContext?.available === "boolean", "cc_list_projects omitted Supervisor Context availability");
   const contextTool = listed.tools.find((tool) => tool.name === "cc_get_project_context");
   assert(contextTool?.annotations?.readOnlyHint === true && contextTool?.annotations?.destructiveHint === false, "cc_get_project_context is not marked read-only");
   const projectContextResponse = await client.callTool({ name: "cc_get_project_context", arguments: { project: registeredBoard.id } });
   const projectContext = projectContextResponse.structuredContent?.context;
   assert(projectContext?.project?.id === registeredBoard.id, "Supervisor Context returned the wrong project");
-  assert(projectContext?.technicalStack?.includes("localStorage") && projectContext?.constraints?.length, "Supervisor Context omitted stack or constraints");
-  assert(projectContext?.supervisorInstructions?.includes("dark mode"), "Supervisor Context omitted AI_SUPERVISOR.md instructions");
+  assert(projectContext?.technicalStack?.includes("Local REST API") && projectContext?.constraints?.length, "Supervisor Context omitted stack or constraints");
+  assert(projectContext?.supervisorInstructions === "" && projectContext?.supervisorContext?.available === false, "Supervisor Context did not represent the optional instruction file accurately");
   assert(Array.isArray(projectContext?.sessions), "Supervisor Context omitted Project Sessions");
   const continuityTool = listed.tools.find((tool) => tool.name === "cc_get_project_continuity");
   assert(continuityTool?.annotations?.readOnlyHint === true && continuityTool?.annotations?.destructiveHint === false, "Project Continuity tool is not read-only");
@@ -241,7 +241,7 @@ try {
   const asyncPlanResponse = await client.callTool({
     name: "cc_create_task",
     arguments: {
-      prompt: "Task Runtime protocol smoke. Inspect nothing and use the mock worker.",
+      prompt: `Task Runtime protocol smoke for registered Project ${registeredBoard.name}. Inspect nothing and use the mock worker.`,
       mode: "plan",
       mockWorker: true,
       resourceProfile: "exploration_readonly"
@@ -252,11 +252,13 @@ try {
   assert(asyncPlan.status === "queued", `cc_create_task did not immediately return queued: ${asyncPlan.status}`);
   assert(asyncPlan.currentAttempt === null, "New queued task already exposed an attempt in its creation response");
   assert(asyncPlan.settings.resourceProfile === "exploration_readonly", "cc_create_task did not persist exploration_readonly on the Task");
+  assert(asyncPlan.projectId === registeredBoard.id && asyncPlan.workspacePath === registeredBoard.workspacePath, "cc_create_task did not bind the exact registered Project named in the prompt");
   const asyncPlanCompleted = await waitForTask(asyncPlan.taskId, ["succeeded", "failed", "interrupted"]);
   assert(asyncPlanCompleted.status === "succeeded", `Asynchronous mock plan failed: ${JSON.stringify(asyncPlanCompleted.error)}`);
   assert(asyncPlanCompleted.attempts.length === 1, "Asynchronous task did not persist exactly one attempt");
   assert(asyncPlanCompleted.attempts[0].resourceProfile === "exploration_readonly", "Attempt did not snapshot exploration_readonly");
   assert(asyncPlanCompleted.attempts[0].resourceLimits.maxFilesRead === 100, "Attempt did not snapshot exploration_readonly limits");
+  assert(asyncPlanCompleted.attempts[0].projectContextSnapshot?.fileName === "project-context-snapshot.json", "Project-bound durable plan did not prepare a Project Context Snapshot before the Attempt");
 
   const firstEvents = await client.callTool({
     name: "cc_get_task_events",
@@ -339,29 +341,29 @@ try {
   assert(directDecision.structuredContent?.workflowId === null, "respond_directly unexpectedly created a Workflow");
 
   const missingProjectBinding = await client.callTool({ name: "cc_create_workflow", arguments: {
-    userRequest: "给任务看板增加标签",
+    userRequest: "给审批中心增加标签",
     supervisorDecision: { intent: "code_change", goal: "增加标签", project: registeredBoard.id, reasoning: ["需要修改代码。"], workflowType: "software_change", confidence: 0.9, nextAction: "create_workflow" },
     mockWorker: true
   } });
   assert(missingProjectBinding.structuredContent?.status === "invalid_input" && missingProjectBinding.structuredContent?.error?.includes("projectId_required"), "GPT Workflow creation without projectId was not rejected");
 
   const workflowCreated = await client.callTool({ name: "cc_create_workflow", arguments: {
-    userRequest: "给任务看板增加暗色模式",
+    userRequest: "给审批中心增加暗色模式",
     projectId: registeredBoard.projectId,
     sessionName: "Task board dark mode",
     supervisorDecision: {
       intent: "code_change",
-      goal: "为任务看板增加可持久化的暗色模式。",
+      goal: "为审批中心增加可持久化的暗色模式。",
       goalConfidence: 0.97,
       possibleIntentMismatch: null,
       clarificationNeeded: false,
-      technical_summary: "使用 CSS 自定义属性实现主题颜色，并使用 localStorage 保存用户主题偏好。",
+      technical_summary: "使用 CSS 自定义属性实现主题颜色，并使用浏览器存储保存用户主题偏好。",
       implementation_strategy: "先确认现有样式和初始化入口，再增加主题变量、切换控件和启动恢复逻辑，不改变任务数据结构。",
       expected_changes: ["主题颜色迁移到 CSS 自定义属性。", "增加主题切换和偏好恢复逻辑。"],
       validation_plan: ["验证主题切换。", "验证刷新后偏好保持。", "验证任务新增、筛选和完成交互未回归。"],
       project: registeredBoard.id,
       projectId: registeredBoard.projectId,
-      reasoning: ["该请求需要修改现有前端。", "项目 Context 要求无依赖并保持 localStorage 兼容。"],
+      reasoning: ["该请求需要修改现有前端。", "项目 Context 要求保持静态前端与本地 API 边界。"],
       risks: ["主题初始化时机可能造成闪烁。"],
       workflowType: discoveredSoftwareDefinition.id,
       confidence: 0.96,
@@ -374,8 +376,8 @@ try {
   assert(workflowCreated.structuredContent?.workflow?.status === "planning", "Workflow did not enter planning automatically");
   assert(workflowCreated.structuredContent?.workflow?.workflowPlan?.workflowType === "software_change", "Workflow Planner did not select software_change for the export feature");
   assert(workflowCreated.structuredContent?.workflow?.workflowPlan?.selection === "supervisor_decision", "Workflow Planner did not consume the persisted Supervisor Decision");
-  assert(workflowCreated.structuredContent?.decision?.project?.id === "dogfood-study-board", "Supervisor did not select the registered task-board project");
-  assert(workflowCreated.structuredContent?.workflow?.projectId === "dogfood-study-board", "Workflow did not freeze projectId");
+  assert(workflowCreated.structuredContent?.decision?.project?.id === registeredBoard.id, "Supervisor did not select the registered release project");
+  assert(workflowCreated.structuredContent?.workflow?.projectId === registeredBoard.id, "Workflow did not freeze projectId");
   assert(workflowCreated.structuredContent?.workflow?.workspacePath === registeredBoard.workspacePath, "Workflow did not freeze Registry workspacePath");
   assert(/^session_/.test(workflowCreated.structuredContent?.workflow?.sessionId || ""), "Workflow did not create a Project Session");
   assert(workflowCreated.structuredContent?.decision?.implementation_strategy?.includes("主题变量"), "GPT implementation strategy was not persisted");
@@ -388,7 +390,7 @@ try {
   assert(/^task_/.test(plannerTaskId || ""), "Workflow did not create planner Task automatically");
   const plannerTask = await client.callTool({ name: "cc_get_task", arguments: { taskId: plannerTaskId } });
   assert(plannerTask.structuredContent?.task?.prompt?.includes("implementation_strategy") && plannerTask.structuredContent?.task?.prompt?.includes("validation_plan"), "Planner prompt omitted GPT Supervisor guidance");
-  assert(plannerTask.structuredContent?.task?.projectId === "dogfood-study-board" && plannerTask.structuredContent?.task?.workspacePath === registeredBoard.workspacePath, "Task did not inherit Project binding");
+  assert(plannerTask.structuredContent?.task?.projectId === registeredBoard.id && plannerTask.structuredContent?.task?.workspacePath === registeredBoard.workspacePath, "Task did not inherit Project binding");
   assert(plannerTask.structuredContent?.task?.sessionId === workflowCreated.structuredContent?.workflow?.sessionId, "Task did not inherit Project Session");
   await waitForTask(plannerTaskId, ["succeeded"]);
   const waitingWorkflow = await waitForWorkflow(workflowId, ["waiting_approval"]);

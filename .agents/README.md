@@ -23,7 +23,7 @@ Future MCP wrappers should call the CLI through JSON input and consume `worker-r
 .\.agents\claude-task.ps1 plan -InputJson .\task.json
 ```
 
-Worker contracts are mode-specific. Plan mode requires `summary`, `files_read`, `proposed_changes`, `risks`, and `blocked_on`; it requires real Read evidence but not execution-stage changes, commands, or checks. Review mode retains the seven execution-audit fields: `summary`, `files_read`, `changes_made`, `commands_run`, `tests_or_checks`, `risks`, and `blocked_on`. Run mode retains those seven fields and additionally requires `run_result`: `{ "type": "modified" }` keeps the strict change and final-Read requirements, while `{ "type": "noop", "reason": "..." }` permits no changes only with a concrete reason, successful Read evidence, and a reported check. A successfully parsed strict Worker `summary` is stored in full. Optional supervisor fields include `observed_tools`, `observed_commands`, `permission_denials`, `observed_file_targets`, and `audit_issues`.
+Worker contracts are mode-specific. Plan mode requires `summary`, `files_read`, `proposed_changes`, `risks`, and `blocked_on`; it requires real Read evidence but not execution-stage changes, commands, or checks. Review mode retains the seven execution-audit fields: `summary`, `files_read`, `changes_made`, `commands_run`, `tests_or_checks`, `risks`, and `blocked_on`. Run mode retains those seven fields and additionally requires `run_result`: `{ "type": "modified" }` keeps the strict change and final-Read requirements, while `{ "type": "noop", "reason": "..." }` permits no changes only with a concrete reason, successful Read evidence, and a reported check. The CLI JSON Schema mirrors these run invariants, rejects placeholder terminal submissions, and treats StructuredOutput as a one-time terminal audit action. Any successful Write/Edit makes the Attempt permanently `modified`; a later tool call after StructuredOutput is rejected as `premature_audit_output`, and observed partial writes remain visible. A successfully parsed strict Worker `summary` is stored in full. Optional supervisor fields include `observed_tools`, `observed_commands`, `permission_denials`, `observed_file_targets`, and `audit_issues`.
 
 Exit codes: `0=success`, `1=worker_failed`, `2=policy_blocked`, `3=invalid_input`, `4=environment_failed`.
 
@@ -59,7 +59,7 @@ Cost control should not rely only on `MaxBudgetUsd`. Keep tasks split, use appro
 
 ## Resource profiles
 
-`.agents/resource-profiles.json` defines `small_readonly` (default targeted reads), `exploration_readonly` (multi-file project discovery), `medium_analysis`, and `large_change`. Select a profile without changing the common Worker audit fields or run-result rules:
+`.agents/resource-profiles.json` defines targeted read, exploration, review, analysis, and small/medium/large change envelopes. For `software_change`, the Workflow Definition keeps `small_change` as a compatibility fallback; after the read-only Planner succeeds, Workflow Runtime derives a bounded small/medium/large tier from the audited plan scope and freezes the selected profile before approval. The selection cannot name a profile outside the Definition whitelist or exceed the global hard limits. Direct Harness calls can still select a profile without changing the common Worker audit fields or run-result rules:
 
 ```powershell
 .\.agents\claude-task.ps1 plan -Task "Explore the project structure and identify relevant architecture files." -ResourceProfile exploration_readonly

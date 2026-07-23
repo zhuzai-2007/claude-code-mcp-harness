@@ -11,12 +11,16 @@ const audit = classifyWorkflowFailure({ failure: { failedStage: "review", role: 
 assert.equal(audit.category, "audit_contract");
 assert.equal(audit.stageLabel, "Review");
 
+const premature = classifyWorkflowFailure({ failure: { failedStage: "implementation", role: "coder", error: { code: "premature_audit_output", message: "tool call after StructuredOutput" } } });
+assert.equal(premature.category, "audit_contract");
+assert.equal(premature.title, "Worker submitted audit output too early");
+
 const timeout = classifyWorkflowFailure({ failure: { failedStage: "implementation", role: "coder", error: { code: "interrupted", message: "Worker attempt failed." } } });
 assert.equal(timeout.category, "worker_timeout");
 assert.equal(timeout.stageLabel, "Execution");
 
-const safe = classifyWorkflowFailure({ failure: { error: { code: "worker_crash", message: "API_KEY=secret-value sk-abcdefghijklmnopqrstuvwxyz" } } });
+const safe = classifyWorkflowFailure({ failure: { error: { code: "worker_crash", message: `API_KEY=secret-value ${["sk", "syntheticredactionvalue"].join("-")}` } } });
 assert(!safe.message.includes("secret-value"));
-assert(!safe.message.includes("abcdefghijklmnopqrstuvwxyz"));
+assert(!safe.message.includes("syntheticredactionvalue"));
 
 console.log(JSON.stringify({ ok: true, provider: provider.category, audit: audit.category }, null, 2));

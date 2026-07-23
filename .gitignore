@@ -7,6 +7,7 @@ mcp-server/*.working-v0.1
 mcp-server/.server-test.*.log
 .agents/runs/
 .agents/local.config.json
+.agents/projects.local.json
 .agents/policy.json.backup-*
 .agent-runs/
 runtime-data/

@@ -24,6 +24,9 @@ assert.deepEqual(resourceProfileHarnessArgs(exploration), [
 const review = resolveMcpResourceProfile({ resourceProfile: "review_readonly" }, bridgeConfig);
 assert.deepEqual(review.limits, { maxBudgetUsd: 1.5, maxTurns: 50, maxFilesRead: 40, maxCommands: 1, timeoutSeconds: 600 });
 
+const mediumChange = resolveMcpResourceProfile({ resourceProfile: "medium_change" }, bridgeConfig);
+assert.deepEqual(mediumChange.limits, { maxBudgetUsd: 2.5, maxTurns: 120, maxFilesRead: 100, maxCommands: 25, timeoutSeconds: 1200 });
+
 const boundedExploration = resolveMcpResourceProfile({ resourceProfile: "exploration_readonly", maxBudgetUsd: 0.75, workerTimeoutSeconds: 600 }, bridgeConfig);
 assert.equal(boundedExploration.limits.maxBudgetUsd, 0.75);
 assert.equal(boundedExploration.limits.timeoutSeconds, 600);

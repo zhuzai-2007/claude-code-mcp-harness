@@ -25,7 +25,7 @@ try {
     store: { async listWorkflows() { return [workflow, legacyWorkflow]; } },
     async inspectWorkflow(workflowId) { return workflowId === workflow.workflowId ? workflow : workflowId === legacyWorkflow.workflowId ? legacyWorkflow : null; }
   };
-  const continuity = new ProjectContinuityService({ workflowRuntime, projectRegistry: registry, store, releaseStatus: { schemaVersion: 1, projectId: "fixture", version: "1.8.0-beta.1", readiness: "pending_gpt_web_validation", lastGptWebDogfood: null, attention: ["Release pending"], nextRequiredChecks: ["Run end-to-end validation"] } });
+  const continuity = new ProjectContinuityService({ workflowRuntime, projectRegistry: registry, store, releaseStatus: { schemaVersion: 1, projectId: "fixture", version: "1.10.0-beta.1", readiness: "pending_gpt_web_validation", lastGptWebDogfood: null, attention: ["Release pending"], nextRequiredChecks: ["Run end-to-end validation"] } });
   const session = await store.createSession({ projectId: "fixture", name: "Search continuity", purpose: "Continue search delivery", decisions: ["Keep the UI dependency-free"], unresolvedQuestions: ["Should search include archived items?"], nextActions: ["Confirm search scope"] });
   await store.attachWorkflowToSession(session.sessionId, workflow.workflowId);
   const linked = await store.requireSession(session.sessionId, "fixture");
@@ -44,7 +44,7 @@ try {
   const context = await continuity.getProjectContext("fixture");
   assert.equal(context.brief.currentStatus, "idle");
   assert.equal(context.health.status, "healthy");
-  assert.equal(context.health.release.version, "1.8.0-beta.1");
+  assert.equal(context.health.release.version, "1.10.0-beta.1");
   assert(context.health.attention.includes("Release pending"));
   assert(context.health.recommended.includes("Run end-to-end validation"));
   assert(context.brief.recommendedNextSteps.includes("Keep search indexing isolated"));

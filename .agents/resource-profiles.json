@@ -2,25 +2,39 @@
   "schemaVersion": 1,
   "defaultProfile": "small_readonly",
   "hardLimits": {
-    "maxBudgetUsd": 5.0,
+    "maxBudgetUsd": 5,
     "maxTurns": 200,
     "maxFilesRead": 500,
     "maxCommands": 100,
     "timeoutSeconds": 3600
   },
   "profiles": {
-    "small_readonly": {
-      "maxBudgetUsd": 1.0,
-      "maxTurns": 30,
-      "maxFilesRead": 30,
-      "maxCommands": 1,
-      "timeoutSeconds": 300
-    },
     "exploration_readonly": {
       "maxBudgetUsd": 1.5,
       "maxTurns": 100,
       "maxFilesRead": 100,
       "maxCommands": 1,
+      "timeoutSeconds": 1200
+    },
+    "large_change": {
+      "maxBudgetUsd": 4,
+      "maxTurns": 150,
+      "maxFilesRead": 200,
+      "maxCommands": 50,
+      "timeoutSeconds": 1800
+    },
+    "medium_analysis": {
+      "maxBudgetUsd": 2,
+      "maxTurns": 80,
+      "maxFilesRead": 100,
+      "maxCommands": 10,
+      "timeoutSeconds": 1200
+    },
+    "medium_change": {
+      "maxBudgetUsd": 2.5,
+      "maxTurns": 120,
+      "maxFilesRead": 100,
+      "maxCommands": 25,
       "timeoutSeconds": 1200
     },
     "review_readonly": {
@@ -37,19 +51,12 @@
       "maxCommands": 10,
       "timeoutSeconds": 900
     },
-    "medium_analysis": {
-      "maxBudgetUsd": 2.0,
-      "maxTurns": 80,
-      "maxFilesRead": 100,
-      "maxCommands": 10,
-      "timeoutSeconds": 1200
-    },
-    "large_change": {
-      "maxBudgetUsd": 4.0,
-      "maxTurns": 150,
-      "maxFilesRead": 200,
-      "maxCommands": 50,
-      "timeoutSeconds": 1800
+    "small_readonly": {
+      "maxBudgetUsd": 1,
+      "maxTurns": 30,
+      "maxFilesRead": 30,
+      "maxCommands": 1,
+      "timeoutSeconds": 300
     }
   }
 }

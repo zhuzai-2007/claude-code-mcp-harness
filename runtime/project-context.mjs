@@ -11,6 +11,25 @@ function normalized(value) {
   return String(value || "").trim().toLocaleLowerCase("en-US").replaceAll("\\", "/");
 }
 
+function projectIdFor(entry) {
+  return String(entry?.projectId || entry?.id || entry?.name || "").trim();
+}
+
+function hasStandaloneProjectDefinition(entry) {
+  return Boolean(projectIdFor(entry) && String(entry?.name || "").trim() && String(entry?.workspacePath || entry?.path || "").trim());
+}
+
+async function readRegistry(registryPath, { optional = false } = {}) {
+  try {
+    const registry = JSON.parse((await readFile(registryPath, "utf8")).replace(/^\uFEFF/, ""));
+    if (!Array.isArray(registry.projects)) throw new Error(`Project registry must contain a projects array: ${registryPath}`);
+    return registry;
+  } catch (error) {
+    if (optional && error?.code === "ENOENT") return { schemaVersion: 1, projects: [] };
+    throw error;
+  }
+}
+
 function publicProject(project, lastUsed = null) {
   return {
     projectId: project.id,
@@ -27,31 +46,77 @@ function publicProject(project, lastUsed = null) {
     constraints: [...project.defaultConstraints],
     supervisorContext: { ...project.supervisorContext },
     memory: { ...project.memory },
-    lastUsed: lastUsed || project.lastUsed || null
+    lastUsed: lastUsed || project.lastUsed || null,
+    managed: project.managed === true,
+    system: project.system === true,
+    pinned: project.pinned === true,
+    archived: project.archived === true,
+    source: project.source || "base",
+    createdAt: project.createdAt || null,
+    updatedAt: project.updatedAt || null
   };
 }
 
 export class ProjectContextRegistry {
-  constructor({ projectRoot, registryPath, usageProvider = null }) {
+  constructor({ projectRoot, registryPath, localRegistryPath = null, usageProvider = null, metadataStore = null, workspaceRoot = "workspace" }) {
     this.projectRoot = path.resolve(projectRoot);
     this.registryPath = path.resolve(registryPath);
+    this.localRegistryPath = localRegistryPath ? path.resolve(localRegistryPath) : path.join(path.dirname(this.registryPath), "projects.local.json");
     this.usageProvider = usageProvider || (async () => ({}));
+    this.metadataStore = metadataStore;
+    this.workspaceRoot = path.resolve(this.projectRoot, workspaceRoot);
     this.projects = [];
+    this.diagnostics = [];
   }
 
   async init() {
-    const config = JSON.parse((await readFile(this.registryPath, "utf8")).replace(/^\uFEFF/, ""));
+    const [releaseRegistry, localRegistry] = await Promise.all([
+      readRegistry(this.registryPath),
+      readRegistry(this.localRegistryPath, { optional: true })
+    ]);
+    const overlay = this.metadataStore ? await this.metadataStore.listRecords() : [];
+    const merged = new Map();
+    this.diagnostics = [];
+    for (const [registryLayer, entries] of [["release", releaseRegistry.projects], ["local", localRegistry.projects]]) {
+      for (const entry of entries) {
+        const id = projectIdFor(entry);
+        if (merged.has(id)) throw new Error(`Duplicate projectId across release and local registries: ${id}`);
+        merged.set(id, { ...entry, source: entry.source || (registryLayer === "release" ? "base" : "local"), registryLayer });
+      }
+    }
+    for (const record of overlay) {
+      const id = projectIdFor(record);
+      if (merged.has(id)) {
+        const existing = merged.get(id);
+        merged.set(id, { ...existing, ...record, source: record.source || existing.source, registryLayer: existing.registryLayer });
+      } else if (hasStandaloneProjectDefinition(record)) {
+        merged.set(id, { ...record, source: record.source || "runtime", registryLayer: "runtime" });
+      } else {
+        this.diagnostics.push({
+          code: "orphaned_runtime_project_metadata",
+          projectId: id || null,
+          message: `Runtime project metadata has no release or local project definition and was ignored: ${id || "(missing projectId)"}`
+        });
+      }
+    }
     const ids = new Set();
-    this.projects = (config.projects || []).map((entry) => {
+    this.projects = [...merged.values()].map((entry) => {
       const id = String(entry.projectId || entry.id || entry.name || "").trim();
       const name = String(entry.name || "").trim();
-      const relativePath = String(entry.workspacePath || entry.path || "").trim().replaceAll("\\", "/").replace(/^\.\//, "");
+      const configuredPath = String(entry.workspacePath || entry.path || "").trim();
+      const relativePath = configuredPath.replaceAll("\\", "/").replace(/^\.\//, "");
       if (!id || !name || !relativePath) throw new Error("Each registered project requires id, name, and path.");
       if (ids.has(id)) throw new Error(`Duplicate registered project id: ${id}`);
       ids.add(id);
+      if (entry.registryLayer === "local" && path.isAbsolute(configuredPath)) throw new Error(`Local project path must be relative: ${configuredPath}`);
       const absolutePath = path.resolve(this.projectRoot, relativePath);
       const relative = path.relative(this.projectRoot, absolutePath);
       if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Registered project escapes projectRoot: ${relativePath}`);
+      const workspaceRelative = path.relative(this.workspaceRoot, absolutePath);
+      const insideWorkspace = workspaceRelative !== "" && !workspaceRelative.startsWith("..") && !path.isAbsolute(workspaceRelative);
+      if (entry.registryLayer === "local" && !insideWorkspace) throw new Error(`Local project must be inside the workspace root: ${relativePath}`);
+      const inferredManaged = workspaceRelative !== "" && !workspaceRelative.startsWith("..") && !path.isAbsolute(workspaceRelative) && !workspaceRelative.includes(path.sep);
+      if (entry.managed === true && !inferredManaged) throw new Error(`Managed Project must be a direct child of the workspace root: ${relativePath}`);
       return {
         id,
         name,
@@ -62,7 +127,14 @@ export class ProjectContextRegistry {
         techStack: [...new Set((entry.stack || entry.techStack || String(entry.language || "unknown").split(",")).map((item) => String(item).trim()).filter(Boolean))],
         defaultConstraints: [...new Set((entry.constraints || entry.defaultConstraints || []).map((item) => String(item).trim()).filter(Boolean))],
         lastUsed: entry.lastUsed || null,
-        aliases: [...new Set([...(entry.aliases || []), name, relativePath].map(normalized).filter(Boolean))]
+        aliases: [...new Set([...(entry.aliases || []), name, relativePath].map(normalized).filter(Boolean))],
+        managed: inferredManaged && entry.managed !== false,
+        system: entry.system === true || relativePath === ".",
+        pinned: entry.pinned === true,
+        archived: entry.archived === true,
+        source: String(entry.source || "base"),
+        createdAt: entry.createdAt || null,
+        updatedAt: entry.updatedAt || null
       };
     });
     if (!this.projects.length) throw new Error("Project registry must contain at least one project.");
@@ -100,13 +172,17 @@ export class ProjectContextRegistry {
     return this;
   }
 
+  getDiagnostics() {
+    return this.diagnostics.map((entry) => ({ ...entry }));
+  }
+
   async listProjects() {
     const usage = await this.usageProvider();
     return this.projects.map((project) => publicProject(project, usage[project.id])).sort((left, right) => String(right.lastUsed || "").localeCompare(String(left.lastUsed || "")) || left.name.localeCompare(right.name));
   }
 
   async refreshProjectMemory(selector) {
-    const resolution = this.resolve("", { selector });
+    const resolution = this.resolve("", { selector, allowArchived: true });
     const project = this.projects.find((candidate) => candidate.id === resolution.project.id);
     const projectMemoryPath = path.join(path.resolve(this.projectRoot, project.path), PROJECT_MEMORY_FILE);
     try {
@@ -125,7 +201,7 @@ export class ProjectContextRegistry {
   }
 
   getProjectContext(selector) {
-    const resolution = this.resolve("", { selector });
+    const resolution = this.resolve("", { selector, allowArchived: true });
     const project = this.projects.find((candidate) => candidate.id === resolution.project.id);
     return {
       project: publicProject(project),
@@ -140,26 +216,29 @@ export class ProjectContextRegistry {
     };
   }
 
-  resolve(userRequest, { selector = null } = {}) {
+  resolve(userRequest, { selector = null, allowArchived = false } = {}) {
     if (!this.projects.length) throw new Error("Project registry is not initialized.");
     if (selector) {
       const exact = normalized(selector);
       const project = this.projects.find((candidate) => [candidate.id, candidate.name, candidate.path, ...candidate.aliases].map(normalized).includes(exact));
       if (!project) throw new Error(`Unknown registered project: ${selector}`);
+      if (project.archived && !allowArchived) throw new Error(`Project is archived and cannot create Workflows: ${project.id}`);
       return { status: "selected", method: "explicit", project: publicProject(project), candidates: [] };
     }
 
-    if (this.projects.length === 1) return { status: "selected", method: "only_candidate", project: publicProject(this.projects[0]), candidates: [] };
+    const activeProjects = this.projects.filter((project) => !project.archived);
+    if (!activeProjects.length) throw new Error("No active registered projects are available.");
+    if (activeProjects.length === 1) return { status: "selected", method: "only_candidate", project: publicProject(activeProjects[0]), candidates: [] };
 
     const text = normalized(userRequest);
-    const scored = this.projects.map((project) => {
+    const scored = activeProjects.map((project) => {
       const matches = project.aliases.filter((alias) => alias.length >= 2 && text.includes(alias));
       return { project, score: matches.reduce((total, alias) => total + alias.length, 0), matches };
     }).filter((entry) => entry.score > 0).sort((left, right) => right.score - left.score || left.project.name.localeCompare(right.project.name));
     const winners = scored.filter((entry) => entry.score === scored[0]?.score);
     if (winners.length === 1) return { status: "selected", method: "request_match", project: publicProject(winners[0].project), candidates: [] };
 
-    const candidates = (winners.length ? winners : this.projects.map((project) => ({ project }))).map(({ project }) => publicProject(project));
+    const candidates = (winners.length ? winners : activeProjects.map((project) => ({ project }))).map(({ project }) => publicProject(project));
     return { status: "confirmation_required", method: winners.length ? "ambiguous_match" : "no_match", project: null, candidates };
   }
 }

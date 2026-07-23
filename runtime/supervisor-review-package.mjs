@@ -6,7 +6,7 @@ function clone(value) {
 
 function auditFields(audit) {
   if (!audit) return null;
-  const keys = ["status", "mode", "summary", "files_read", "proposed_changes", "changes_made", "commands_run", "tests_or_checks", "risks", "blocked_on", "run_result", "resource_profile", "resource_limits", "resource_usage", "cost", "error", "audit_issues", "supervisor_notes", "artifact_status"];
+  const keys = ["status", "mode", "summary", "files_read", "proposed_changes", "changes_made", "commands_run", "tests_or_checks", "risks", "blocked_on", "run_result", "resource_profile", "resource_limits", "resource_usage", "cost", "error", "audit_issues", "supervisor_notes", "capability_diagnostics", "artifact_status"];
   return Object.fromEntries(keys.map((key) => [key, clone(audit[key])]).filter(([, value]) => value !== undefined));
 }
 

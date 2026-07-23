@@ -22,7 +22,14 @@ class FakeRunner {
     this.delayMs = delayMs;
     this.counter = 0;
     this.calls = [];
+    this.preparedContexts = [];
     this.forceMissingArtifact = false;
+  }
+
+  prepareAttemptContext(input) {
+    this.preparedContexts.push(input);
+    if (input.mode !== "plan" || !input.projectContext?.workspacePath) return null;
+    return { metadata: { fileName: "project-context-snapshot.json", projectRoot: input.projectContext.workspacePath, generatedAt: new Date().toISOString(), empty: true, entryCount: 0, truncated: false } };
   }
 
   generateAttemptId() {
@@ -141,6 +148,19 @@ try {
   assert.equal(mediumCompleted.settings.resourceLimits.maxTurns, 80);
   assert.equal(runner.calls.at(-1).resourceProfile, "medium_analysis");
   assert.equal(runner.calls.at(-1).maxFilesRead, 100);
+
+  const projectBoundPlan = await runtime.createTask({
+    prompt: "Plan against the registered empty project",
+    mode: "plan",
+    mockWorker: true,
+    projectContext: { projectId: "empty-project", name: "Empty Project", workspacePath: path.join(testRoot, "workspace", "empty-project") }
+  });
+  const projectBoundCompleted = await waitFor(runtime, projectBoundPlan.taskId, (task) => task.status === "succeeded");
+  assert.equal(projectBoundCompleted.projectId, "empty-project");
+  assert.equal(projectBoundCompleted.attempts[0].projectContextSnapshot.empty, true);
+  assert.equal(runner.calls.at(-1).projectContext.projectId, "empty-project");
+  assert.equal(runner.calls.at(-1).projectContext.workspacePath, path.join(testRoot, "workspace", "empty-project").replaceAll("\\", "/"));
+  assert.equal(runner.calls.at(-1).preparedAttemptContext.metadata.fileName, "project-context-snapshot.json");
 
   await assert.rejects(
     runtime.createTask({ prompt: "Exceed the global hard budget", mode: "plan", resourceProfile: "medium_analysis", maxBudgetUsd: 5.01, mockWorker: true }),

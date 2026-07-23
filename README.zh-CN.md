@@ -1,4 +1,4 @@
-# Supervisor v1.8 Beta
+# Supervisor v1.10 Beta
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -67,12 +67,12 @@ Dashboard 是查看状态、证据和执行审批的控制台，不替代 ChatGP
 - Workflow 与 Task 持久化，浏览器或 MCP 客户端断开后任务仍可继续；
 - 根据请求选择软件修改、只读分析或文档修改流程；
 - 在任何可写 Task 创建前提供明确的 Approve / Reject；
-- 使用 Resource Profile 限制预算、turn、读取文件、命令和超时；
+- 使用 Resource Profile 限制预算、turn、读取文件、命令和超时；软件修改会在只读 Planner 完成后，依据已审计方案范围选择并固化 small / medium / large 执行档位，再进入人工审批；
 - 展示修改文件、Review、风险、错误、成本和资源使用；
 - 将 Worker JSON 自报与 Claude Code 真实工具事件交叉验证；
 - 通过 OpenAI Secure MCP Tunnel 向 ChatGPT Web 暴露固定 MCP 工具。
 - 在 Workflow 创建前持久化 Supervisor Decision，记录意图、目标、项目、判断依据、流程类型、置信度和下一步动作；
-- 通过 `.agents/projects.json` 管理 `projectId/workspacePath`，并用项目根目录的 `AI_SUPERVISOR.md` 与 `PROJECT_MEMORY.md` 向 GPT 提供项目上下文；
+- 通过发布注册表 `.agents/projects.json`、本地注册表 `.agents/projects.local.json` 与 runtime overlay 管理 `projectId/workspacePath`，并用项目根目录的 `AI_SUPERVISOR.md` 与 `PROJECT_MEMORY.md` 向 GPT 提供项目上下文；
 - 用 Project Session 把同一项目的多个 Workflow 关联起来，但不保存 ChatGPT 聊天内容；
 - 在审批中心展示决策上下文、资源上限、规则成本估算，以及来自真实 Write/Edit 工具事件的 Diff。
 - 使用固定非项目 prompt、空临时目录、禁用工具和会话持久化来执行 Provider Preflight；
@@ -135,9 +135,9 @@ http://127.0.0.1:8787/supervisor/
 
 Supervisor 会先持久化 Decision，再进行只读规划。紧凑的 Workflow 顶栏在 Workflow 摘要与阶段时间线之间切换，不再同时占用高度。时间线按需只显示 Decision/Plan、Approval、Implementation 或 Review 页面；已完成和当前阶段可查看，未来阶段不可点击。整体状态默认折叠，独立固定的 Recent Work 栏可以收起和恢复。检查有边界的计划后，填写审批人和决策理由，再明确选择 Approve 或 Reject。审批信息属于本地审计元数据，不等同于身份认证。
 
-Dashboard 默认跟随浏览器语言，也可手动切换中文/English。Recent Work 按日期分组；显示名称和归档状态单独保存在已忽略的 `runtime-data/supervisor-workflow-metadata/`，不会重写 Workflow 快照或事件。ChatGPT Supervisor 仍是主要请求入口，Dashboard 的 **备用本地入口** 默认折叠，仅作为本地规则模式备用。
+Dashboard 默认跟随浏览器语言，也可手动切换中文/English，并支持跟随系统、浅色和深色主题。主控制台以 Project 为第一层：Project 在同一工作区树中纵向展开其活动和归档 Workflow，所选 Project 或 Workflow 在右侧详情区打开。活动 Workflow 按创建时间排序；终态 Workflow 可以归档和恢复，且不会重写快照、事件、Review Package、Artifact 或 Memory 历史。顶部的 **设置** 可调整后续 Task 的默认 Resource Profile、各档位资源值和可配置安全锁；代码内置绝对上限仍不可突破，运行中的 Attempt 继续使用已固化的限制。审批、审计、Side-effect Guard、并发和保留策略在设置中可见但只读。设置操作具备请求超时、重复提交保护、弹窗内错误提示和过期轮询防护。ChatGPT Supervisor 仍是主要入口；Dashboard 的 **备用本地入口** 默认折叠，并提供与左侧工作区树同步的已注册活动 Project 选择器。
 
-首次使用前请检查 `.agents/projects.json`。项目路径必须相对于 `projectRoot`；当控制台要求确认项目时，确认后仍然只会先启动只读 Planner。
+`.agents/projects.json` 是可发布注册表；本机私有 Project 写入已忽略的 `.agents/projects.local.json`，可从 `.agents/projects.local.example.json` 复制模板。加载顺序固定为 release registry、local registry、runtime overlay；release/local 的 `projectId` 冲突会阻止启动，本地路径必须是 `workspace/` 内的相对路径。Dashboard 创建的 Project 记录和元数据覆盖单独保存在已忽略的 `runtime-data/supervisor-project-registry/projects.json`。创建 Project 只接受名称，并且只会在 `workspace/` 下创建一级受管目录；重命名保持 `projectId` 不变，并同步移动该受管目录。Dashboard 不扫描或自动导入未注册目录，也不接受任意绝对路径。新 Workflow 必须明确绑定已注册 Project；Dashboard 不再维护独立的未分配工作历史分组。
 
 默认 `doctor.ps1` 不会调用外部模型。显式添加 `-ProviderPreflight` 后，只会从隔离的空临时目录发送固定连通性标记，工具和会话持久化均关闭；不会发送项目内容，也不会创建 Workflow。该探针可能产生 Provider 的最低单次请求费用。
 
@@ -157,9 +157,9 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 
 v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Decision、Workflow、Task、审批、资源和审计边界不变，只收紧首次使用说明、版本检查、发布文件可见性和可重复的 Todo 验收。详见 [v1.0-beta 发布审计](docs/v1.0-beta-release-audit.md)。
 
-## v1.8 Beta 发布候选
+## v1.10 Beta 发布候选
 
-v1.8 把 Decision、Project Context、Project Intelligence、Human-GPT Collaboration 与 Project Continuity 收敛成公开 Beta 候选。新增的 Project Health 与发布状态完全由已有 Workflow、Review、Memory 元数据和静态发布元数据确定，不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [Changelog](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.md#end-to-end-release-validation)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
+v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [Changelog](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.md#end-to-end-release-validation)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
 
 ## 架构
 
@@ -253,7 +253,8 @@ v1.7 增加 Project Continuity。Dashboard 默认进入 Project Overview，按�
 - `.agents/policy.json`：模式和工具策略；
 - `.agents/resource-profiles.json`：资源包和全局硬上限；
 - `.agents/workflow-definitions.json`：Workflow 选择信息和阶段；
-- `.agents/projects.json`：注册的相对项目路径和选择别名；
+- `.agents/projects.json`：可发布 Project 的相对路径和选择别名；
+- `.agents/projects.local.example.json`：只含占位符的本地注册表模板；
 - `AI_SUPERVISOR.md`：可选、仅供 GPT 使用的项目指令；原文不会复制到 Worker prompt；
 - `PROJECT_MEMORY.md`：可选、仅供 GPT 使用的项目目标、技术决策、重要修改、已知问题与后续计划；
 - `mcp-server/config.example.json`：只包含占位符的 Bridge 模板。
@@ -261,6 +262,7 @@ v1.7 增加 Project Continuity。Dashboard 默认进入 Project Overview，按�
 机器本地、已忽略配置：
 
 - `mcp-server/config.json`：工作区路径、本地端口、超时和 Origin；
+- `.agents/projects.local.json`：位于 `workspace/` 内的本机私有 Project；
 - `.agents/local.config.json`：旧版本地设置；
 - runtime 数据、Worker 产物、Tunnel profile 和日志。
 
@@ -296,20 +298,12 @@ $env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
 # 隔离启动 Bridge，并完成 mock MCP Workflow
 .\scripts\test-mcp-protocol.ps1
 
-# Runtime 和产品 UI 测试
-node .\runtime\workflow-planner.test.mjs
-node .\runtime\workflow-runtime.test.mjs
-node .\runtime\supervisor-brain.test.mjs
-node .\runtime\project-continuity.test.mjs
-node .\runtime\runtime-retention.test.mjs
-node .\runtime\harness-runner.test.mjs
-node .\runtime\provider-preflight.test.mjs
-node .\runtime\failure-catalog.test.mjs
-node .\workspace\autonomous-beta-demo\demo.test.mjs
-node .\workspace\release-beta-todo-demo\demo.test.mjs
-node .\mcp-server\supervisor-dashboard-routes.test.mjs
-node .\mcp-server\supervisor-product-view.test.mjs
-node .\workspace\supervisor-dashboard\dashboard-ui.test.mjs
+# 自动发现所有 Git 可见的 runtime/MCP/scripts/workspace *.test.mjs
+.\scripts\run-node-tests.ps1
+
+# 校验发布 Project、本地注册表忽略规则和 runtime-data 边界
+.\scripts\verify-release-projects.ps1
+
 .\scripts\doctor-nvm.test.ps1
 ```
 

@@ -17,6 +17,7 @@ $required = @(
     "CHANGELOG.md",
     ".agents\release-status.json",
     ".agents\projects.json",
+    ".agents\projects.local.example.json",
     ".agents\resource-profiles.json",
     ".agents\workflow-definitions.json",
     "runtime\supervisor-decision.mjs",
@@ -32,6 +33,10 @@ $required = @(
     "scripts\provider-preflight.mjs",
     "scripts\invoke-claude-preflight.ps1",
     "scripts\onboarding-contract.test.mjs",
+    "scripts\verify-release-projects.ps1",
+    "scripts\run-node-tests.ps1",
+    "scripts\test-discovery.mjs",
+    "scripts\test-discovery.test.mjs",
     "workspace\supervisor-dashboard\index.html",
     "workspace\autonomous-beta-demo\index.html",
     "workspace\autonomous-beta-demo\app.js",
@@ -49,7 +54,7 @@ $required = @(
     "mcp-server\config.example.json"
 )
 $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repoRoot $_)) })
-Add-Check "Required product files" ($missing.Count -eq 0) $(if ($missing.Count) { "Missing: $($missing -join ', ')" } else { "All required v1.8-beta release files are present." })
+Add-Check "Required product files" ($missing.Count -eq 0) $(if ($missing.Count) { "Missing: $($missing -join ', ')" } else { "All required v1.10-beta release files are present." })
 
 $ignoredRequired = [System.Collections.Generic.List[string]]::new()
 foreach ($relativePath in $required) {
@@ -60,7 +65,7 @@ foreach ($relativePath in $required) {
 Add-Check "Release artifact visibility" ($ignoredRequired.Count -eq 0) $(if ($ignoredRequired.Count) { "Required files are ignored by Git: $($ignoredRequired -join ', ')" } else { "Required product files are visible to Git and can be included in a release." })
 
 $package = Get-Content -LiteralPath (Join-Path $repoRoot "mcp-server\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-Add-Check "Release version" ([string]$package.version -eq "1.8.0-beta.1") "mcp-server package version is $($package.version)."
+Add-Check "Release version" ([string]$package.version -eq "1.10.0-beta.1") "mcp-server package version is $($package.version)."
 
 $lockPath = Join-Path $repoRoot "mcp-server\package-lock.json"
 # Windows PowerShell 5.1 rejects the empty-string property used by npm lockfile v3.
@@ -77,7 +82,7 @@ $invalidProjects = @($registry.projects | Where-Object { [string]::IsNullOrWhite
 Add-Check "Project context schema" ([int]$registry.schemaVersion -ge 3 -and $invalidProjects.Count -eq 0) $(if ($invalidProjects.Count) { "Projects missing projectId, workspacePath, description, stack, aliases, or constraints: $($invalidProjects.projectId -join ', ')" } else { "$(@($registry.projects).Count) registered projects satisfy schema v$($registry.schemaVersion)." })
 
 $readme = Get-Content -LiteralPath (Join-Path $repoRoot "README.md") -Raw -Encoding UTF8
-$flowMarkers = @("Five-minute quick start", "Clone the repository", ".\install.ps1", ".\scripts\doctor.ps1", "-ProviderPreflight", ".\start.ps1", "start-openai-tunnel.ps1", "cc_list_projects", "cc_list_workflow_definitions", "Add CSV export to the demo task board", "/supervisor/", "Create recovery workflow", "v0.9 autonomous validation", "autonomous-beta-demo", "v1.0-beta release audit", "release-beta-todo-demo")
+$flowMarkers = @("Five-minute quick start", "Clone the repository", ".\install.ps1", ".\scripts\doctor.ps1", "-ProviderPreflight", ".\start.ps1", "start-openai-tunnel.ps1", "cc_list_projects", "cc_list_workflow_definitions", "Add CSV export to the demo task board", "/supervisor/", "Create recovery workflow", "v0.9 autonomous validation", "autonomous-beta-demo", "v1.0-beta release audit")
 $missingFlow = @($flowMarkers | Where-Object { -not $readme.Contains($_) })
 Add-Check "Operator quick start" ($missingFlow.Count -eq 0) $(if ($missingFlow.Count) { "README is missing: $($missingFlow -join ', ')" } else { "README documents clone/install/doctor/start/Dashboard usage." })
 
@@ -104,7 +109,7 @@ Add-Check "Project Continuity contracts" $continuityMarkersPresent "Evidence-der
 $releaseStatus = Get-Content -LiteralPath (Join-Path $repoRoot ".agents\release-status.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 $gptWebUsage = Get-Content -LiteralPath (Join-Path $repoRoot "docs\gpt-web-usage.md") -Raw -Encoding UTF8
 $healthMarkersPresent = $continuitySource.Contains('health') -and $dashboardSource.Contains('project-health-summary') -and [string]$releaseStatus.version -eq [string]$package.version -and [string]$releaseStatus.readiness -eq "pending_gpt_web_validation" -and $gptWebUsage.Contains('new ChatGPT Web conversation') -and $gptWebUsage.Contains('cc_get_supervisor_review_package')
-Add-Check "v1.8 stabilization contracts" $healthMarkersPresent "Deterministic Project Health, release metadata, and the fresh-session GPT Web validation guide are present."
+Add-Check "v1.10 stabilization contracts" $healthMarkersPresent "Deterministic Project Health, release metadata, and the fresh-session GPT Web validation guide are present."
 
 $demoSource = Get-Content -LiteralPath (Join-Path $repoRoot "workspace\autonomous-beta-demo\app.js") -Raw -Encoding UTF8
 $demoCss = Get-Content -LiteralPath (Join-Path $repoRoot "workspace\autonomous-beta-demo\styles.css") -Raw -Encoding UTF8
@@ -117,7 +122,7 @@ $releaseDemoContractPresent = $releaseDemoTest.Contains('release todo contract')
 Add-Check "Release Todo Demo contract" $releaseDemoContractPresent "The isolated Todo baseline has a dependency-free executable contract test; real-provider acceptance remains a separate conditional gate."
 
 $tracked = @(& git -C $repoRoot ls-files)
-$forbidden = @($tracked | Where-Object { $_ -match '(^|/)(config\.json|runtime-data|\.agents/runs|\.agent-runs|outbox|logs|tunnel-client-profiles)(/|$)' -or $_ -match '\.(bak|log)$|\.working-|^tunnel-client-logs-' })
+$forbidden = @($tracked | Where-Object { $_ -eq ".agents/projects.local.json" -or $_ -match '(^|/)(config\.json|runtime-data|\.agents/runs|\.agent-runs|outbox|logs|tunnel-client-profiles)(/|$)' -or $_ -match '\.(bak|log)$|\.working-|^tunnel-client-logs-' })
 Add-Check "Tracked runtime hygiene" ($forbidden.Count -eq 0) $(if ($forbidden.Count) { "Forbidden tracked files: $($forbidden -join ', ')" } else { "No local config, runtime data, backup, or log files are tracked." })
 
 if (-not $SkipGitClean) {

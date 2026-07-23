@@ -48,9 +48,28 @@ try {
     definitions,
     workflowPlanner,
     autoReconcile: false,
-    resultProvider: (attemptId) => attemptId.endsWith("001")
-      ? { summary: "Plan search", files_read: ["app.js"], proposed_changes: ["Add search"] }
-      : { summary: "Implemented search", files_read: ["app.js"], changes_made: ["app.js"], tests_or_checks: ["Read app.js"], run_result: { type: "modified" } }
+    resultProvider: (attemptId) => {
+      if (attemptId.endsWith("001")) return { summary: "Plan search", files_read: ["app.js"], proposed_changes: ["Add search"] };
+      if (attemptId.endsWith("004")) return {
+        summary: "Plan a medium multi-file change",
+        files_read: ["app.js", "index.html"],
+        proposed_changes: [
+          { file: "app.js", type: "modify" },
+          { file: "index.html", type: "modify" },
+          { file: "tests.html", type: "create" }
+        ],
+        risks: ["Compatibility"],
+        blocked_on: []
+      };
+      if (attemptId.endsWith("006")) return {
+        summary: "Plan a large cross-file change",
+        files_read: ["src/index.js"],
+        proposed_changes: Array.from({ length: 8 }, (_, index) => ({ file: `src/file-${index}.js`, type: "modify" })),
+        risks: [],
+        blocked_on: []
+      };
+      return { summary: "Implemented search", files_read: ["app.js"], changes_made: ["app.js"], tests_or_checks: ["Read app.js"], run_result: { type: "modified" } };
+    }
   });
   await taskRuntime.start();
   await workflowRuntime.start();
@@ -61,6 +80,11 @@ try {
     { role: "coder", mode: "run", requiresApproval: true, resourceProfile: "small_change" },
     { role: "reviewer", mode: "review", requiresApproval: false, resourceProfile: "review_readonly" }
   ]);
+  assert.deepEqual(definitions.definitions.software_change.stages.find((stage) => stage.role === "coder").resourceProfilePolicy.tiers, {
+    small: "small_change",
+    medium: "medium_change",
+    large: "large_change"
+  });
   assert.deepEqual(definitions.definitions.documentation_change.stages.map(({ role, resourceProfile }) => ({ role, resourceProfile })), [
     { role: "planner", resourceProfile: "small_readonly" },
     { role: "coder", resourceProfile: "small_change" },
@@ -81,7 +105,10 @@ try {
   assert.equal(waiting.status, "waiting_approval");
   assert.equal(waiting.currentStage, "implementation");
   assert.equal(waiting.nextAction.type, "approve_workflow");
-  assert.equal(waiting.stages.find((stage) => stage.role === "coder").taskId, null, "Coder Task was created before human approval");
+  const waitingCoderStage = waiting.stages.find((stage) => stage.role === "coder");
+  assert.equal(waitingCoderStage.taskId, null, "Coder Task was created before human approval");
+  assert.equal(waitingCoderStage.resourceProfile, "small_change");
+  assert.equal(waitingCoderStage.resourceSelection.tier, "small");
   assert.equal((await taskRuntime.listTasks()).filter((task) => task.workflowId === created.workflowId).length, 1, "Unapproved Workflow created more than the planner Task");
 
   const approved = await workflowRuntime.approveWorkflow(created.workflowId, { approvedBy: "workflow-test", approvalReason: "Approve the bounded implementation plan." });
@@ -113,6 +140,7 @@ try {
 
   const events = await workflowRuntime.getWorkflowEvents(created.workflowId);
   assert(events.events.some((event) => event.type === "workflow.planning_completed"));
+  assert(events.events.some((event) => event.type === "workflow.stage_resource_selected"));
   assert(events.events.some((event) => event.type === "workflow.approval_requested"));
   assert(events.events.some((event) => event.type === "workflow.approval_completed"));
   assert(events.events.some((event) => event.type === "workflow.completed"));
@@ -144,6 +172,27 @@ try {
   assert.equal(persisted.status, "completed");
   assert(persisted.tasks.every((task) => task.status === "succeeded"));
   assert.equal(persisted.approvals.implementation.approvedBy, "workflow-test");
+  assert.equal(persisted.approvals.implementation.resourceProfile, "small_change");
+
+  const mediumWorkflow = await workflowRuntime.createWorkflow({ userRequest: "Change the UI, storage, and add a test file" });
+  await waitForTask(taskRuntime, mediumWorkflow.tasks[0].taskId);
+  const mediumWaiting = await workflowRuntime.reconcileWorkflow(mediumWorkflow.workflowId);
+  const mediumCoderStage = mediumWaiting.stages.find((stage) => stage.role === "coder");
+  assert.equal(mediumCoderStage.resourceProfile, "medium_change", "Planner scope must upgrade a multi-file Coder stage");
+  assert.equal(mediumCoderStage.resourceSelection.source, "planner_audit");
+  assert.equal(mediumCoderStage.resourceSelection.limits.maxBudgetUsd, 2.5);
+  const mediumApproved = await workflowRuntime.approveWorkflow(mediumWorkflow.workflowId, { approvedBy: "resource-reviewer", approvalReason: "Approve the Planner-selected medium resource envelope." });
+  const mediumCoderTask = await taskRuntime.getTask(mediumApproved.stages.find((stage) => stage.role === "coder").taskId);
+  assert.equal(mediumCoderTask.settings.resourceProfile, "medium_change", "Coder Attempt must freeze the Planner-selected profile");
+  assert.equal(mediumApproved.approvals.implementation.resourceProfile, "medium_change", "Approval must bind the selected profile");
+  await waitForTask(taskRuntime, mediumCoderTask.taskId);
+
+  const largeWorkflow = await workflowRuntime.createWorkflow({ userRequest: "Apply a broad cross-file software change" });
+  await waitForTask(taskRuntime, largeWorkflow.tasks[0].taskId);
+  const largeWaiting = await workflowRuntime.reconcileWorkflow(largeWorkflow.workflowId);
+  const largeCoderStage = largeWaiting.stages.find((stage) => stage.role === "coder");
+  assert.equal(largeCoderStage.resourceProfile, "large_change", "Planner scope must upgrade a broad Coder stage to the large tier");
+  assert.equal(largeCoderStage.resourceSelection.metrics.uniqueFiles, 8);
 
   const decisionWorkflow = await workflowRuntime.createWorkflow({
     userRequest: "Inspect the registered task board",

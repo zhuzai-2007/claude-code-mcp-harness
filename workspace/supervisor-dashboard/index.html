@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <title>Supervisor</title>
   <link rel="stylesheet" href="./style.css">
 </head>
@@ -11,10 +11,11 @@
   <header class="topbar">
     <a class="brand" href="./"><span class="brand-mark">S</span><span><strong>Supervisor</strong><small data-i18n="brand.subtitle">Personal development runtime</small></span></a>
     <div class="connection">
+      <label class="theme-control"><span class="sr-only">Theme</span><select id="theme-switch" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <label class="language-control"><span class="sr-only">Language</span><select id="language-switch" aria-label="Language"><option value="zh-CN">中文</option><option value="en">English</option></select></label>
       <span id="connection-dot" class="connection-dot"></span><span><strong id="connection">Connecting</strong><small id="last-updated">Waiting for runtime</small></span>
       <div id="provider-preflight" class="preflight-state"><strong id="preflight-status">Provider not checked</strong><small id="preflight-detail">No project content is sent</small></div>
-      <button id="run-preflight" class="secondary-button" type="button">Test provider</button><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button>
+      <button id="run-preflight" class="secondary-button" type="button">Test provider</button><button id="open-settings" class="icon-button" type="button" title="Settings" data-i18n-title="settings.open" aria-label="Settings">⚙</button><button id="refresh" class="icon-button" type="button" title="Refresh">↻</button>
     </div>
   </header>
 
@@ -22,18 +23,13 @@
     <details id="local-entry" class="local-entry panel">
       <summary><span><strong data-i18n="entry.label">Local fallback entry</strong><small data-i18n="entry.hint">Primary: ChatGPT Supervisor · fallback: local rule mode</small></span><span class="chevron">⌄</span></summary>
       <div class="local-entry-content">
-        <div><p class="eyebrow" data-i18n="entry.eyebrow">Start a supervised workflow</p><h1 data-i18n="entry.title">What would you like to change?</h1><p class="lede" data-i18n="entry.description">Describe the outcome in plain language. Supervisor will plan first and pause before file changes.</p></div>
+        <div class="local-entry-intro"><h1 class="local-entry-title" data-i18n="entry.title">What would you like to change?</h1></div>
         <form id="new-task-form" class="new-task-form">
           <label class="sr-only" for="user-request">Development request</label>
           <textarea id="user-request" name="userRequest" maxlength="5000" required data-i18n-placeholder="entry.placeholder"></textarea>
-          <div class="form-footer"><span data-i18n="entry.guard">Planning is read-only · execution always requires approval</span><button id="create-task" class="primary-button" type="submit" data-i18n="entry.create">Create workflow</button></div>
+          <div class="form-footer"><label class="entry-project-control" for="entry-project-select"><span data-i18n="entry.project">Target Project</span><select id="entry-project-select" name="projectId" aria-label="Target Project"></select><small data-i18n="entry.guard">Planning is read-only · execution always requires approval</small></label><button id="create-task" class="primary-button" type="submit" data-i18n="entry.create" disabled>Create workflow</button></div>
         </form>
         <div id="action-message" class="action-message" role="status" aria-live="polite"></div>
-        <div id="project-confirmation" class="project-confirmation hidden">
-          <div><p class="eyebrow" data-i18n="project.eyebrow">Project confirmation</p><h2 data-i18n="project.title">Which registered project should Supervisor use?</h2><p data-i18n="project.description">No Worker or Workflow starts until this ambiguity is resolved.</p></div>
-          <label><span data-i18n="project.target">Target project</span><select id="project-options"></select></label>
-          <div class="approval-actions"><button id="cancel-project" class="danger-button" type="button" data-i18n="project.cancel">Cancel</button><button id="confirm-project" class="primary-button" type="button" data-i18n="project.confirm">Confirm project</button></div>
-        </div>
       </div>
     </details>
 
@@ -42,15 +38,14 @@
       <section id="overview" class="overview-grid" aria-label="Workflow overview"></section>
     </details>
     <div id="console-grid" class="console-grid">
-      <button id="show-recent" class="show-recent hidden" type="button" data-i18n-title="recent.show" title="Show recent work"><span>›</span><small data-i18n="recent.show">Show recent work</small></button>
-      <aside class="recent-panel panel">
-        <div class="panel-heading"><div><p class="eyebrow" data-i18n="recent.eyebrow">Activity</p><h2 data-i18n="recent.title">Recent work</h2></div><div class="recent-actions"><span id="workflow-count" class="count">0</span><button id="create-folder" class="icon-button compact create-folder-button" type="button" data-i18n-title="folders.create" title="Create folder">+</button><button id="hide-recent" class="icon-button compact" type="button" data-i18n-title="recent.hide" title="Hide recent work">‹</button></div></div>
-        <details id="project-browser" class="project-browser" open>
-          <summary><span data-i18n="projects.title">Projects</span><strong id="project-count">0</strong></summary>
-          <div id="project-list" class="project-list"></div>
-          <div id="project-summary" class="project-summary hidden"></div>
-        </details>
-        <div id="workflow-list" class="workflow-list"><div class="empty-state" data-i18n="recent.empty">No workflows yet.</div></div>
+      <aside class="workspace-panel project-panel panel">
+        <div class="panel-heading"><div><p class="eyebrow" data-i18n="projects.workspace">Workspace</p><h2 data-i18n="projects.title">Projects</h2></div><div class="recent-actions"><span id="project-count" class="count">0</span><button id="create-project" class="icon-button compact" type="button" title="Create Project">+</button></div></div>
+        <div class="project-tree">
+          <section><h3 data-i18n="projects.active">Active Projects</h3><div id="active-project-list" class="project-list"></div></section>
+          <details id="archived-projects"><summary><span data-i18n="projects.archived">Archived Projects</span><strong id="archived-project-count">0</strong></summary><div id="archived-project-list" class="project-list"></div></details>
+          <details id="global-archived-workflows" class="project-scope-group"><summary><span data-i18n="projects.globalArchive">Global Archived Workflows</span><strong id="global-archive-count">0</strong></summary><div id="global-archive-workflows-list" class="scope-workflows"></div></details>
+        </div>
+        <div id="project-summary" class="project-summary hidden"></div>
       </aside>
 
       <section class="detail-column">
@@ -96,12 +91,13 @@
 
           <div id="stage-review" class="stage-view hidden">
             <section id="review-result-grid" class="result-grid"></section>
-            <article id="recovery-panel" class="panel recovery-panel hidden">
-              <div class="panel-heading"><div><p class="eyebrow" data-i18n="recovery.eyebrow">Reliability</p><h2 data-i18n="recovery.title">Failure and recovery</h2></div><span id="failure-category">Failure</span></div>
-              <div id="failure-content" class="failure-content"></div>
-              <form id="recovery-form" class="recovery-form"><p data-i18n="recovery.description">A recovery creates a new Workflow from Planning. Previous history stays unchanged and no approval is reused.</p><label><span data-i18n="recovery.operator">Operator name</span><input id="recovery-operator" maxlength="100" required></label><label><span data-i18n="recovery.reason">Recovery reason</span><textarea id="recovery-reason" maxlength="1000" required></textarea></label><button id="retry-workflow" class="primary-button" type="submit" data-i18n="recovery.create">Create recovery workflow</button></form>
-            </article>
           </div>
+
+          <article id="recovery-panel" class="panel recovery-panel hidden">
+            <div class="panel-heading"><div><p class="eyebrow" data-i18n="recovery.eyebrow">Reliability</p><h2 data-i18n="recovery.title">Failure and recovery</h2></div><span id="failure-category">Failure</span></div>
+            <div id="failure-content" class="failure-content"></div>
+            <form id="recovery-form" class="recovery-form"><p data-i18n="recovery.description">A recovery creates a new Workflow from Planning. Previous history stays unchanged and no approval is reused.</p><label><span data-i18n="recovery.operator">Operator name</span><input id="recovery-operator" maxlength="100" required></label><label><span data-i18n="recovery.reason">Recovery reason</span><textarea id="recovery-reason" maxlength="1000" required></textarea></label><button id="retry-workflow" class="primary-button" type="submit" data-i18n="recovery.create">Create recovery workflow</button></form>
+          </article>
 
           <article id="supervisor-collaboration" class="panel collaboration-panel hidden">
             <div class="collaboration-heading">
@@ -131,18 +127,19 @@
       <div class="dialog-hero"><span class="dialog-icon" aria-hidden="true">✦</span><div><p class="eyebrow" data-i18n="metadata.eyebrow">Session</p><h2 data-i18n="metadata.title">Workflow settings</h2><p data-i18n="metadata.description">Organize this session without changing its runtime history.</p></div><button id="metadata-close" class="icon-button dialog-close" value="cancel" type="button" aria-label="Close">×</button></div>
       <div class="dialog-body">
         <label class="field-card"><span data-i18n="metadata.name">Display name</span><input id="metadata-display-name" maxlength="120"><small data-i18n="metadata.nameHint">Leave empty to use the original request</small></label>
-        <label class="field-card"><span data-i18n="metadata.folder">Folder</span><select id="metadata-folder"></select><small data-i18n="metadata.folderHint">Folders only organize Dashboard metadata.</small></label>
         <label class="setting-row"><span><strong data-i18n="metadata.archived">Archive session</strong><small data-i18n="metadata.archiveHint">Keep the session and its history, but mark it archived.</small></span><input id="metadata-archived" class="switch-input" type="checkbox"><span class="switch-control" aria-hidden="true"></span></label>
       </div>
-      <div class="dialog-footer"><button class="secondary-button" value="cancel" type="button" id="metadata-cancel" data-i18n="metadata.cancel">Cancel</button><button class="primary-button" value="save" type="submit" data-i18n="metadata.save">Save changes</button></div>
+      <p id="workflow-metadata-message" class="dialog-message" role="status" aria-live="polite"></p>
+      <div class="dialog-footer"><button class="secondary-button" value="cancel" type="button" id="metadata-cancel" data-i18n="metadata.cancel">Cancel</button><button id="workflow-metadata-save" class="primary-button" value="save" type="submit" data-i18n="metadata.save">Save changes</button></div>
     </form>
   </dialog>
 
-  <dialog id="folder-dialog" class="metadata-dialog folder-dialog">
-    <form id="folder-form" method="dialog">
-      <div class="dialog-hero"><span class="dialog-icon folder-dialog-icon" aria-hidden="true">▱</span><div><p class="eyebrow" data-i18n="folders.eyebrow">Workspace</p><h2 id="folder-dialog-title" data-i18n="folders.newTitle">New folder</h2><p data-i18n="folders.description">Group related sessions without changing Workflow history.</p></div><button id="folder-close" class="icon-button dialog-close" value="cancel" type="button" aria-label="Close">×</button></div>
-      <div class="dialog-body"><label class="field-card"><span data-i18n="folders.name">Folder name</span><input id="folder-name" maxlength="60" required data-i18n-placeholder="folders.namePlaceholder"><small data-i18n="folders.nameHint">Use a short project or topic name.</small></label><div id="folder-delete-note" class="delete-note hidden"><strong data-i18n="folders.deleteTitle">Delete folder?</strong><p data-i18n="folders.deleteHint">Sessions in this folder will return to Default.</p></div></div>
-      <div class="dialog-footer split"><button id="delete-folder" class="danger-button subtle hidden" type="button" data-i18n="folders.delete">Delete folder</button><span></span><button class="secondary-button" value="cancel" type="button" id="folder-cancel" data-i18n="metadata.cancel">Cancel</button><button class="primary-button" value="save" type="submit" data-i18n="folders.save">Save folder</button></div>
+  <dialog id="project-dialog" class="metadata-dialog project-dialog">
+    <form id="project-form" method="dialog">
+      <div class="dialog-hero"><span class="dialog-icon folder-dialog-icon" aria-hidden="true">P</span><div><p class="eyebrow" data-i18n="projects.workspace">Workspace</p><h2 id="project-dialog-title">New Project</h2><p id="project-dialog-description">Projects are managed inside the workspace root.</p></div><button id="project-dialog-close" class="icon-button dialog-close" value="cancel" type="button" aria-label="Close">×</button></div>
+      <div class="dialog-body"><label class="field-card"><span data-i18n="projects.name">Project name</span><input id="project-name" maxlength="80" required><small id="project-managed-note">The Project folder is generated under workspace/.</small></label><label id="project-pin-row" class="setting-row hidden"><span><strong data-i18n="projects.pin">Pin Project</strong><small data-i18n="projects.pinHint">Pinned Projects appear first.</small></span><input id="project-pinned" class="switch-input" type="checkbox"><span class="switch-control" aria-hidden="true"></span></label><label id="project-archive-row" class="setting-row hidden"><span><strong data-i18n="projects.archive">Archive Project</strong><small data-i18n="projects.archiveHint">Archived Projects cannot create Workflows.</small></span><input id="project-archived" class="switch-input" type="checkbox"><span class="switch-control" aria-hidden="true"></span></label></div>
+      <p id="project-dialog-message" class="dialog-message" role="status" aria-live="polite"></p>
+      <div class="dialog-footer"><button class="secondary-button" value="cancel" type="button" id="project-dialog-cancel" data-i18n="metadata.cancel">Cancel</button><button id="project-save" class="primary-button" value="save" type="submit" data-i18n="metadata.save">Save changes</button></div>
     </form>
   </dialog>
 
@@ -170,6 +167,20 @@
         <p class="handoff-note" data-i18n="intelligence.noWorker">This controlled append does not run a Worker and is recorded in Memory application history.</p>
       </div>
       <div class="dialog-footer"><button id="memory-apply-cancel" class="secondary-button" type="button" data-i18n="metadata.cancel">Cancel</button><button id="confirm-memory-apply" class="primary-button" type="submit" data-i18n="intelligence.apply">Confirm and apply</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog" class="metadata-dialog settings-dialog">
+    <form id="settings-form">
+      <div class="dialog-hero settings-dialog-hero"><span class="dialog-icon" aria-hidden="true">⚙</span><div><p class="eyebrow" data-i18n="settings.eyebrow">Runtime policy</p><h2 data-i18n="settings.title">Supervisor settings</h2><p data-i18n="settings.description">Tune future Task resources without weakening execution governance.</p></div><button id="settings-close" class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+      <div class="settings-body">
+        <p class="settings-notice" data-i18n="settings.futureOnly">Changes apply to new Tasks only. Running Attempts keep their persisted resource snapshot.</p>
+        <section class="settings-section"><div class="settings-section-heading"><div><h3 data-i18n="settings.defaults">Defaults and safety locks</h3><p data-i18n="settings.defaultsHint">Choose the fallback profile and tighten the maximum values the Dashboard may configure.</p></div></div><label class="field-card settings-default"><span data-i18n="settings.defaultProfile">Default resource profile</span><select id="settings-default-profile"></select></label><div id="settings-hard-limits" class="resource-fields"></div></section>
+        <section class="settings-section"><div class="settings-section-heading"><div><h3 data-i18n="settings.profiles">Resource profiles</h3><p data-i18n="settings.profilesHint">Planner-selected profiles remain bounded by the locks above and immutable code limits.</p></div></div><div id="settings-profiles" class="settings-profiles"></div></section>
+        <section class="settings-section"><div class="settings-section-heading"><div><h3 data-i18n="settings.governance">Runtime governance</h3><p data-i18n="settings.governanceHint">Security-critical controls are visible here but cannot be disabled from Dashboard.</p></div></div><div id="settings-runtime" class="settings-runtime"></div></section>
+      </div>
+      <p id="settings-message" class="dialog-message" role="status" aria-live="polite"></p>
+      <div class="dialog-footer"><button id="settings-cancel" class="secondary-button" type="button" data-i18n="metadata.cancel">Cancel</button><button id="settings-save" class="primary-button" type="submit" data-i18n="settings.save">Save resource policy</button></div>
     </form>
   </dialog>
   <script type="module" src="./app.js"></script>

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { writeAttemptProjectContextSnapshot } from "./project-context-snapshot.mjs";
 
 function limitText(value, limit) {
   const text = String(value || "");
@@ -68,6 +69,26 @@ export class HarnessRunner {
     throw new Error("Unable to allocate a unique attemptId.");
   }
 
+  prepareAttemptContext({ attemptId, mode, projectContext = null }) {
+    if (mode !== "plan" || !projectContext?.workspacePath) return null;
+    const prepared = writeAttemptProjectContextSnapshot({
+      projectRoot: this.projectRoot,
+      workspacePath: projectContext.workspacePath,
+      attemptId
+    });
+    return {
+      projectContextSnapshot: prepared,
+      metadata: {
+        fileName: "project-context-snapshot.json",
+        projectRoot: prepared.snapshot.projectRoot,
+        generatedAt: prepared.snapshot.generatedAt,
+        empty: prepared.snapshot.empty,
+        entryCount: prepared.snapshot.entries.length,
+        truncated: prepared.snapshot.truncated
+      }
+    };
+  }
+
   findResult(attemptId) {
     for (const root of [path.join(this.projectRoot, ".agents", "runs"), path.join(this.projectRoot, ".agent-runs")]) {
       const runDir = path.join(root, attemptId);
@@ -91,7 +112,7 @@ export class HarnessRunner {
       return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, ""));
     };
     const toolEvents = readJsonIfPresent("tool-events.json");
-    const artifactFiles = ["worker-result.normalized.json", "result.json", "tool-events.json", "claude-output.json"]
+    const artifactFiles = ["worker-result.normalized.json", "result.json", "tool-events.json", "claude-output.json", "project-context-snapshot.json", "capability-diagnostics.json"]
       .filter((name) => fs.existsSync(path.join(found.runDir, name)));
     return {
       audit: found.result,
@@ -102,7 +123,7 @@ export class HarnessRunner {
   }
 
   artifactPath(attemptId, fileName) {
-    const allowed = new Set(["worker-result.normalized.json", "result.json", "tool-events.json", "claude-output.json"]);
+    const allowed = new Set(["worker-result.normalized.json", "result.json", "tool-events.json", "claude-output.json", "project-context-snapshot.json", "capability-diagnostics.json"]);
     if (!allowed.has(fileName)) return null;
     const found = this.findResult(attemptId);
     if (!found.runDir) return null;
@@ -110,7 +131,7 @@ export class HarnessRunner {
     return fs.existsSync(candidate) ? candidate : null;
   }
 
-  runAttempt({ attemptId, mode, prompt, resourceProfile, resourceLimits = {}, workerTimeoutSeconds, maxBudgetUsd, maxTurns, maxFilesRead, maxCommands, mockWorker = false, approval = null, signal = null, onSpawn = null }) {
+  runAttempt({ attemptId, mode, prompt, resourceProfile, resourceLimits = {}, workerTimeoutSeconds, maxBudgetUsd, maxTurns, maxFilesRead, maxCommands, mockWorker = false, approval = null, projectContext = null, preparedAttemptContext = null, signal = null, onSpawn = null }) {
     const timeout = Number(workerTimeoutSeconds || this.defaultWorkerTimeoutSeconds);
     const effective = {
       maxBudgetUsd: maxBudgetUsd ?? resourceLimits.maxBudgetUsd,
@@ -128,6 +149,9 @@ export class HarnessRunner {
       "-MaxCommands", String(effective.maxCommands),
       "-RunId", attemptId
     ];
+    const preparedContext = preparedAttemptContext || this.prepareAttemptContext({ attemptId, mode, projectContext });
+    const preparedSnapshot = preparedContext?.projectContextSnapshot || null;
+    if (preparedSnapshot?.filePath) args.push("-ProjectContextSnapshotFile", preparedSnapshot.filePath);
     if (mockWorker) args.push("-MockWorker");
     if (mode === "run") {
       if (!approval?.approvedBy || !approval?.approvalReason) {
@@ -157,6 +181,9 @@ export class HarnessRunner {
         clearTimeout(timer);
         signal?.removeEventListener("abort", abortHandler);
         const found = this.findResult(attemptId);
+        if (preparedSnapshot?.filePath) {
+          try { fs.rmSync(preparedSnapshot.filePath, { force: true }); } catch {}
+        }
         const bridgeStatus = cancelled
           ? "cancelled"
           : timedOut

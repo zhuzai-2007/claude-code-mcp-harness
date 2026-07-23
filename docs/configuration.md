@@ -12,7 +12,8 @@ These files are safe to review and commit when they contain no machine-specific 
 | `.agents/policy.json` | Tool permissions, read/write modes, and safety rules. |
 | `.agents/resource-profiles.json` | Budget, turns, files, commands, and timeout envelopes. |
 | `.agents/workflow-definitions.json` | Workflow selection metadata and Stage definitions. |
-| `.agents/projects.json` | Registered project IDs, relative paths, descriptions, technology stacks, aliases, and default Supervisor constraints. |
+| `.agents/projects.json` | Release Project IDs, relative paths, descriptions, technology stacks, aliases, and default Supervisor constraints. |
+| `.agents/projects.local.example.json` | Placeholder-only template for a machine-local Project registry. |
 
 After cloning, `scripts/init-config.ps1` copies the example into ignored `mcp-server/config.json` and replaces `projectRoot` with the current repository path. Recommended local defaults are loopback host `127.0.0.1`, port `8787`, one concurrent Task, and `null` legacy approval defaults.
 
@@ -35,7 +36,7 @@ $env:HTTP_PROXY="http://127.0.0.1:<proxy-port>"
 $env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
 ```
 
-Supervisor Doctor reports only whether these variables are present. It does not print their values. `.env*`, `mcp-server/config.json`, `.agents/local.config.json`, Tunnel profiles, runtime data, logs, and Worker artifacts are ignored by Git.
+Supervisor Doctor reports only whether these variables are present. It does not print their values. `.env*`, `mcp-server/config.json`, `.agents/projects.local.json`, `.agents/local.config.json`, Tunnel profiles, runtime data, logs, and Worker artifacts are ignored by Git.
 
 ## Configuration precedence
 
@@ -45,11 +46,21 @@ Resource limits resolve in this order:
 2. the selected Resource Profile;
 3. the default `small_readonly` profile.
 
-All resolved values remain bounded by `.agents/resource-profiles.json` global hard limits. Legacy `.agents/local.config.json` values do not override a Resource Profile.
+All resolved values remain bounded by `.agents/resource-profiles.json` global hard limits and by immutable code-owned absolute limits. Legacy `.agents/local.config.json` values do not override a Resource Profile.
+
+The local Dashboard **Settings** dialog can change the default profile, profile envelopes, and configured global locks. It writes the same checked-in resource-profile file atomically, affects only Tasks created after the save, and cannot add/remove profile names or exceed the immutable absolute limits. Running Attempts retain their persisted resource snapshot. Approval, strict audit, side-effect protection, concurrency, and retention are shown for operator awareness but are not mutable from this settings surface.
 
 ## Registered projects
 
-Every `.agents/projects.json` entry requires a stable `id`, relative `path`, `description`, `techStack`, `aliases`, and `defaultConstraints`. Paths are validated to exist inside `projectRoot`. Alias matching helps the Supervisor choose a unique project; it is not permission to explore sibling directories. Runtime-derived `lastUsed` values are kept in ignored `runtime-data/project-usage.json` rather than rewriting the public registry.
+Project definitions load in this order:
+
+1. checked-in release definitions from `.agents/projects.json`;
+2. optional machine-local definitions from ignored `.agents/projects.local.json`;
+3. Dashboard-created definitions and metadata overrides from ignored runtime data.
+
+Copy `.agents/projects.local.example.json` to `.agents/projects.local.json` only when a private workspace Project is needed. Local entries cannot use absolute paths and must resolve inside this repository's `workspace/` directory. A `projectId` duplicated across release and local registries is a startup error. Missing local registry is valid. Runtime metadata for a removed local definition is ignored with a diagnostic rather than being promoted into an incomplete Project.
+
+Every definition requires a stable `projectId`, relative `workspacePath`, `description`, `stack`, `aliases`, and `constraints`. Alias matching helps the Supervisor choose a unique project; it is not permission to explore sibling directories. Runtime-derived usage and Dashboard metadata remain ignored rather than rewriting the public registry.
 
 ## Runtime retention
 

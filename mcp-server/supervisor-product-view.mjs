@@ -144,6 +144,7 @@ export function buildSupervisorProductView(workflow, tasks = []) {
       rejectionReason: rejection?.rejectionReason || null,
       rejectedAt: rejection?.rejectedAt || null,
       resourceProfile: implementationStage.resourceProfile || null,
+      resourceSelection: implementationStage.resourceSelection || null,
       estimatedCost,
       workflowResourceEstimate: decision?.estimated_resources || null,
       modificationReason: plannerAudit?.summary || decision?.technical_summary || workflow.userRequest,

@@ -35,7 +35,7 @@ export class WorkflowMetadataStore {
   }
 
   defaultMetadata(workflowId) {
-    return { schemaVersion: 1, workflowId, displayName: null, archived: false, folderId: DEFAULT_FOLDER_ID, updatedAt: null };
+    return { schemaVersion: 2, workflowId, displayName: null, archived: false, archivedAt: null, folderId: DEFAULT_FOLDER_ID, updatedAt: null };
   }
 
   defaultFolder() {
@@ -136,8 +136,9 @@ export class WorkflowMetadataStore {
       ...current,
       ...(Object.hasOwn(patch, "displayName") ? { displayName: patch.displayName } : {}),
       ...(Object.hasOwn(patch, "archived") ? { archived: patch.archived } : {}),
+      ...(Object.hasOwn(patch, "archived") ? { archivedAt: patch.archived ? (current.archivedAt || timestamp) : null } : {}),
       ...(Object.hasOwn(patch, "folderId") ? { folderId: patch.folderId } : {}),
-      schemaVersion: 1,
+      schemaVersion: 2,
       workflowId,
       updatedAt: timestamp
     };

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveResourceProfile } from "./resource-profiles.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const defaultPath = path.resolve(directory, "..", ".agents", "workflow-definitions.json");
@@ -26,6 +27,15 @@ export async function loadWorkflowDefinitions(configPath = defaultPath) {
       }
       if (!promptKinds.has(stage.promptKind || stage.role)) throw new Error(`Workflow definition '${definitionId}' has an unsupported promptKind.`);
       if (stage.mode === "run" && stage.requiresApproval !== true) throw new Error(`Run stage '${stage.id}' must require approval.`);
+      if (stage.resourceProfile) resolveResourceProfile(stage.resourceProfile);
+      if (stage.resourceProfilePolicy != null) {
+        const policy = stage.resourceProfilePolicy;
+        if (stage.mode !== "run" || policy.strategy !== "planner_scope") throw new Error(`Stage '${stage.id}' has an unsupported resource profile policy.`);
+        if (!policy.tiers || !["small", "medium", "large"].every((tier) => typeof policy.tiers[tier] === "string" && policy.tiers[tier].trim())) {
+          throw new Error(`Stage '${stage.id}' resource profile policy requires small, medium, and large tiers.`);
+        }
+        for (const profileName of new Set([policy.defaultProfile, ...Object.values(policy.tiers)].filter(Boolean))) resolveResourceProfile(profileName);
+      }
     }
   }
   if (!definitions[config.defaultDefinition]) throw new Error(`Unknown default Workflow definition: ${config.defaultDefinition}`);

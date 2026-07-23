@@ -38,6 +38,6 @@ Provide a personal, local software-engineering Supervisor in which ChatGPT owns 
 
 ## Next steps
 
-- Run and record the v1.8 fresh-session ChatGPT Web end-to-end validation.
+- Run and record the v1.10 fresh-session ChatGPT Web end-to-end validation.
 - Use real dogfood feedback to calibrate onboarding and Project Health without adding Runtime AI judgment.
 - Continue tightening traceability between registered workspace, Workflow, Task, Attempt, Review Package, and observed tool evidence.

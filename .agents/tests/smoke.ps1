@@ -97,7 +97,7 @@ try {
 Add-Result 'utf8-artifacts-have-no-bom' $noBomOk "checked normalized output, raw output, tool events, prompt, and system prompt"
 
 function Invoke-FixtureScenario {
-    param([string] $Scenario, [string] $Task, [string] $ResourceProfile, [ValidateSet('plan', 'review', 'run')][string] $Mode = 'plan')
+    param([string] $Scenario, [string] $Task, [string] $ResourceProfile, [ValidateSet('plan', 'review', 'run')][string] $Mode = 'plan', [string] $ProjectContextSnapshotFile)
     try {
         $previousPath = $env:PATH
         $previousScenario = $env:CLAUDE_TASK_FIXTURE_SCENARIO
@@ -106,6 +106,7 @@ function Invoke-FixtureScenario {
         $fixtureRunId = New-TestRunId
         $fixtureArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script, $Mode, '-Task', $Task, '-NoBare', '-RunId', $fixtureRunId)
         if ($ResourceProfile) { $fixtureArguments += @('-ResourceProfile', $ResourceProfile) }
+        if ($ProjectContextSnapshotFile) { $fixtureArguments += @('-ProjectContextSnapshotFile', $ProjectContextSnapshotFile) }
         if ($Mode -eq 'run') { $fixtureArguments += @('-ApprovedBy', 'smoke-test', '-ApprovalReason', 'Verify final Read evidence after an approved write.') }
         & powershell @fixtureArguments *> $null
         $fixtureExit = $LASTEXITCODE
@@ -138,18 +139,19 @@ foreach ($contractMode in @('plan', 'review', 'run')) {
         ($generatedPrompt -match '"summary":"\.\.\."') -and
         ($missingContractFields.Count -eq 0)
     $hasModeContract = switch ($contractMode) {
-        'plan' { ($generatedPrompt -match 'plan: this mode analyzes the project and proposes an execution plan') -and ($generatedPrompt -match 'summary.*files_read.*proposed_changes.*risks.*blocked_on') -and ($generatedPrompt -match 'tests_or_checks.*optional') -and ($generatedPrompt -match 'follow only direct dependencies') -and ($generatedPrompt -match 'Reserve enough time and budget') -and ($generatedPrompt -match 'normal human approval.*Workflow transition, not a Worker blocker') -and ($generatedPrompt -match 'Existing immediate subdirectories under workspace') -and ($generatedPrompt -match 'navigation metadata, not Worker Read evidence') }
+        'plan' { ($generatedPrompt -match 'plan: this mode analyzes the project and proposes an execution plan') -and ($generatedPrompt -match 'summary.*files_read.*proposed_changes.*risks.*blocked_on') -and ($generatedPrompt -match 'tests_or_checks.*optional') -and ($generatedPrompt -match 'follow only direct dependencies') -and ($generatedPrompt -match 'Reserve enough time and budget') -and ($generatedPrompt -match 'normal human approval.*Workflow transition, not a Worker blocker') -and ($generatedPrompt -match 'Existing immediate subdirectories under workspace') -and ($generatedPrompt -match 'navigation metadata, not Worker Read evidence') -and ($generatedPrompt -match 'project-context-snapshot\.json') -and ($generatedPrompt -match 'failed Read.*must never appear') -and ($generatedPrompt -match 'Never claim guessed README') }
         'review' { ($generatedPrompt -match 'focused change verifier') -and ($generatedPrompt -match 'Read every reported modified file first') -and ($generatedPrompt -match 'Do not scan the whole repository') -and ($generatedPrompt -match 'changes_made.*must be an empty array') -and ($generatedPrompt -match 'commands_run.*must be an empty array') }
-        'run' { ($generatedPrompt -match 'run_result.*modified.*noop') -and ($generatedPrompt -match 'run modified:.*changes_made.*must not be empty') -and ($generatedPrompt -match 'Write, Edit, and MultiEdit results.*are not verification evidence') -and ($generatedPrompt -match 'Read tool once more on every file listed') -and ($generatedPrompt -match 'run noop:.*changes_made.*empty array') -and ($generatedPrompt -match 'run_result.reason.*concrete reason') }
+        'run' { ($generatedPrompt -match 'run_result.*modified.*noop') -and ($generatedPrompt -match 'run modified:.*changes_made.*must not be empty') -and ($generatedPrompt -match 'Write, Edit, and MultiEdit results.*are not verification evidence') -and ($generatedPrompt -match 'Read tool once more on every file listed') -and ($generatedPrompt -match 'run noop:.*changes_made.*empty array') -and ($generatedPrompt -match 'run_result.reason.*concrete reason') -and ($generatedPrompt -match 'StructuredOutput is the terminal audit submission') -and ($generatedPrompt -match 'once any Write, Edit, or MultiEdit succeeds.*permanently "modified"') -and ($generatedPrompt -match 'requires creating a file but Write is unavailable.*do not leave a partial implementation') }
     }
     Add-Result "prompt-contract-$contractMode" ($hasCommonContract -and $hasModeContract) "common=$hasCommonContract mode=$hasModeContract"
 }
 
 $schemaRunId = New-TestRunId
-& powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task 'verify CLI structured output enforcement' -DryRun -RunId $schemaRunId *> $null
+& powershell -NoProfile -ExecutionPolicy Bypass -File $script run -Task 'verify CLI structured output enforcement' -ApprovedBy 'smoke-test' -ApprovalReason 'Inspect the generated run schema.' -DryRun -RunId $schemaRunId *> $null
 $schemaCommandPath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.agent-runs') "$schemaRunId\command.txt"
 $schemaCommand = if (Test-Path -LiteralPath $schemaCommandPath) { Get-Content -LiteralPath $schemaCommandPath -Raw } else { '' }
 Add-Result 'cli-json-schema-enforced' (($schemaCommand -match '--json-schema') -and ($schemaCommand -match 'proposed_changes')) "schemaFlag=$($schemaCommand -match '--json-schema')"
+Add-Result 'run-json-schema-rejects-empty-terminal-audit' (($schemaCommand -match 'allOf') -and ($schemaCommand -match 'minItems') -and ($schemaCommand -match 'maxItems') -and ($schemaCommand -match 'placeholder') -and ($schemaCommand -match 'reason')) "conditional=$($schemaCommand -match 'allOf') placeholderGuard=$($schemaCommand -match 'placeholder')"
 Add-Result 'system-prompt-uses-file-on-windows' (($schemaCommand -match '--system-prompt-file') -and ($schemaCommand -notmatch '--system-prompt\s+"You are Claude Code')) "fileFlag=$($schemaCommand -match '--system-prompt-file')"
 
 $missingField = Invoke-FixtureScenario -Scenario 'missing-required-field' -Task 'return an audit result that omits one required field'
@@ -164,6 +166,17 @@ Add-Result 'dot-directory-read-path-matches-evidence' (($dotDirectoryRead.exitCo
 
 $planWithProposal = Invoke-FixtureScenario -Scenario 'plan-with-proposed-changes' -Task 'inspect the task board and propose search changes'
 Add-Result 'plan-read-with-proposed-changes-passes' (($planWithProposal.exitCode -eq 0) -and ($planWithProposal.result.status -eq 'success') -and (@($planWithProposal.result.proposed_changes).Count -gt 0) -and (@($planWithProposal.result.changes_made).Count -eq 0) -and ($planWithProposal.result.observed_tools -contains 'Read')) "exit=$($planWithProposal.exitCode) status=$($planWithProposal.result.status) proposals=$(@($planWithProposal.result.proposed_changes).Count)"
+
+$snapshotSource = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.agent-runs\fixture-project-context-snapshot.json'
+[System.IO.Directory]::CreateDirectory((Split-Path -Parent $snapshotSource)) | Out-Null
+[System.IO.File]::WriteAllText($snapshotSource, '{"projectRoot":"workspace/empty-project","entries":[],"empty":true,"generatedAt":"2026-07-19T00:00:00.000Z"}', (New-Object System.Text.UTF8Encoding($false)))
+try {
+    $emptyProjectPlan = Invoke-FixtureScenario -Scenario 'plan-empty-project-snapshot' -Task 'plan the first bounded files for an empty project' -ResourceProfile 'exploration_readonly' -ProjectContextSnapshotFile $snapshotSource
+} finally {
+    Remove-Item -LiteralPath $snapshotSource -Force -ErrorAction SilentlyContinue
+}
+$emptySnapshotArtifact = [string]$emptyProjectPlan.result.artifacts.project_context_snapshot
+Add-Result 'plan-empty-project-snapshot-passes' (($emptyProjectPlan.exitCode -eq 0) -and ($emptyProjectPlan.result.status -eq 'success') -and (@($emptyProjectPlan.result.files_read).Count -eq 1) -and (Test-Path -LiteralPath $emptySnapshotArtifact)) "exit=$($emptyProjectPlan.exitCode) status=$($emptyProjectPlan.result.status) snapshot=$emptySnapshotArtifact"
 
 $planApprovalBlocker = Invoke-FixtureScenario -Scenario 'plan-approval-as-blocker' -Task 'misreport the normal approval transition as a blocker'
 Add-Result 'plan-approval-blocker-still-fails' (($planApprovalBlocker.exitCode -eq 1) -and ($planApprovalBlocker.result.error.code -eq 'worker_blocked') -and ($planApprovalBlocker.result.error.message -match 'Awaiting human approval')) "exit=$($planApprovalBlocker.exitCode) error=$($planApprovalBlocker.result.error.message)"
@@ -219,6 +232,9 @@ Add-Result 'permission-denial-is-not-check-evidence' (($deniedCheck.exitCode -eq
 $failedCheck = Invoke-FixtureScenario -Scenario 'failed-tool-result' -Task 'claim a read whose tool result failed'
 Add-Result 'failed-tool-result-is-not-check-evidence' (($failedCheck.exitCode -eq 1) -and ($failedCheck.result.error.message -match 'file_audit_mismatch') -and ($failedCheck.result.permission_denials.Count -eq 0)) "exit=$($failedCheck.exitCode) denials=$($failedCheck.result.permission_denials.Count)"
 
+$capabilityMismatch = Invoke-FixtureScenario -Scenario 'tool-capability-mismatch' -Task 'record actual Worker tools when discovery tools are unavailable'
+Add-Result 'tool-capability-mismatch-is-diagnosable' (($capabilityMismatch.exitCode -eq 0) -and ($capabilityMismatch.result.capability_diagnostics.initObserved -eq $true) -and ($capabilityMismatch.result.capability_diagnostics.mismatch -eq $true) -and ($capabilityMismatch.result.capability_diagnostics.directoryDiscoveryAvailable -eq $false) -and ($capabilityMismatch.result.capability_diagnostics.missingAllowedTools -contains 'Glob')) "exit=$($capabilityMismatch.exitCode) missing=$(@($capabilityMismatch.result.capability_diagnostics.missingAllowedTools) -join ',')"
+
 $fileMismatch = Invoke-FixtureScenario -Scenario 'file-read-unreported-by-events' -Task 'claim a file read without an event'
 Add-Result 'reported-file-read-must-be-observed' (($fileMismatch.exitCode -eq 1) -and ($fileMismatch.result.error.message -match 'file_audit_mismatch')) "exit=$($fileMismatch.exitCode) error=$($fileMismatch.result.error.message)"
 
@@ -240,6 +256,9 @@ Add-Result 'run-noop-without-reason-fails' (($runNoopWithoutReason.exitCode -eq 
 
 $runModifiedWithoutChanges = Invoke-FixtureScenario -Scenario 'run-modified-without-changes' -Task 'claim a modified result without reporting any changes' -Mode 'run'
 Add-Result 'run-modified-requires-change-evidence' (($runModifiedWithoutChanges.exitCode -eq 1) -and ($runModifiedWithoutChanges.result.error.message -match 'missing_change_evidence')) "exit=$($runModifiedWithoutChanges.exitCode) error=$($runModifiedWithoutChanges.result.error.message)"
+
+$prematureAudit = Invoke-FixtureScenario -Scenario 'premature-structured-output' -Task 'submit audit output before an approved edit' -Mode 'run'
+Add-Result 'structured-output-before-tools-is-rejected' (($prematureAudit.exitCode -eq 1) -and ($prematureAudit.result.error.code -eq 'premature_audit_output') -and ($prematureAudit.result.error.message -match 'tool_call_after_structured_output') -and ($prematureAudit.result.artifact_status -eq 'unvalidated_partial_artifacts_possible') -and ($prematureAudit.result.observed_tools -contains 'Edit')) "exit=$($prematureAudit.exitCode) error=$($prematureAudit.result.error.code) artifact=$($prematureAudit.result.artifact_status)"
 
 $summaryJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $mockRunId -Json 2>&1 | Out-String
 $normalizedFieldsOk = $false

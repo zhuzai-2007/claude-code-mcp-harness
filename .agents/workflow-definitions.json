@@ -29,7 +29,16 @@
           "mode": "run",
           "promptKind": "coder",
           "requiresApproval": true,
-          "resourceProfile": "small_change"
+          "resourceProfile": "small_change",
+          "resourceProfilePolicy": {
+            "strategy": "planner_scope",
+            "defaultProfile": "small_change",
+            "tiers": {
+              "small": "small_change",
+              "medium": "medium_change",
+              "large": "large_change"
+            }
+          }
         },
         {
           "id": "review",

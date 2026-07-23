@@ -14,6 +14,7 @@ param(
     [string] $Model,
     [string[]] $AllowDir = @(),
     [string[]] $ContextFiles = @(),
+    [string] $ProjectContextSnapshotFile,
     [int] $MaxTurns = -1,
     [int] $MaxFilesRead = -1,
     [int] $MaxCommands = -1,
@@ -183,6 +184,7 @@ function ConvertTo-FullText {
 function Get-ToolAudit {
     param([object[]] $Events)
     $calls = @{}
+    $callOrder = New-Object System.Collections.Generic.List[string]
     $denialIds = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::Ordinal)
     $permissionDenials = @()
     foreach ($event in @($Events)) {
@@ -197,8 +199,10 @@ function Get-ToolAudit {
             if ($blockType -eq 'tool_use') {
                 $id = [string](Get-PropValue -Object $block -Name 'id')
                 if ([string]::IsNullOrWhiteSpace($id)) { continue }
+                if (-not $calls.ContainsKey($id)) { [void]$callOrder.Add($id) }
                 $calls[$id] = [ordered]@{
                     id = $id
+                    call_index = $callOrder.IndexOf($id)
                     tool = [string](Get-PropValue -Object $block -Name 'name')
                     input = Get-PropValue -Object $block -Name 'input'
                     result_observed = $false
@@ -221,7 +225,7 @@ function Get-ToolAudit {
             $calls[$id].succeeded = $false
         }
     }
-    $records = @($calls.Values)
+    $records = @($callOrder | ForEach-Object { $calls[[string]$_] })
     $observedTools = @($records | ForEach-Object { $_.tool } | Select-Object -Unique)
     $observedCommands = @()
     $readTargets = @()
@@ -251,6 +255,35 @@ function Get-ToolAudit {
         observed_commands = @($observedCommands)
         permission_denials = @($permissionDenials)
         file_targets = [ordered]@{ read = @($readTargets); write = @($writeTargets); edit = @($editTargets) }
+    }
+}
+
+function Get-CapabilityDiagnostics {
+    param([object[]] $Events, [object[]] $AllowedTools)
+    $initEvent = @($Events | Where-Object {
+        (Get-PropValue -Object $_ -Name 'type') -eq 'system' -and (Get-PropValue -Object $_ -Name 'subtype') -eq 'init'
+    } | Select-Object -First 1)
+    $allowed = @($AllowedTools | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($initEvent.Count -eq 0) {
+        return [ordered]@{
+            initObserved = $false
+            allowedTools = $allowed
+            actualTools = @()
+            missingAllowedTools = @()
+            directoryDiscoveryAvailable = $null
+            mismatch = $false
+        }
+    }
+    $actual = @(ConvertTo-Array (Get-PropValue -Object $initEvent[0] -Name 'tools') | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    $missing = @($allowed | Where-Object { $actual -notcontains $_ })
+    $discovery = @($actual | Where-Object { $_ -in @('Glob', 'LS') })
+    return [ordered]@{
+        initObserved = $true
+        allowedTools = $allowed
+        actualTools = $actual
+        missingAllowedTools = $missing
+        directoryDiscoveryAvailable = ($discovery.Count -gt 0)
+        mismatch = ($missing.Count -gt 0)
     }
 }
 
@@ -306,6 +339,7 @@ function New-NormalizedResult {
         $ObservedFileTargets = $null,
         [object[]] $AuditIssues = @(),
         [object[]] $SupervisorNotes = @(),
+        $CapabilityDiagnostics = $null,
         [string] $ArtifactStatus = $null,
         $Cost = $null,
         $ResourceUsage = $null,
@@ -337,6 +371,7 @@ function New-NormalizedResult {
         observed_file_targets = $ObservedFileTargets
         audit_issues = @($AuditIssues)
         supervisor_notes = @($SupervisorNotes)
+        capability_diagnostics = $CapabilityDiagnostics
         artifact_status = $ArtifactStatus
         cost = $Cost
         resource_profile = $script:ResourceProfileName
@@ -384,6 +419,7 @@ function Add-LedgerEntry {
             blocked_on = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'blocked_on'))
             run_result = Get-PropValue -Object $Normalized -Name 'run_result'
             supervisor_notes = @(ConvertTo-Array (Get-PropValue -Object $Normalized -Name 'supervisor_notes'))
+            capability_diagnostics = Get-PropValue -Object $Normalized -Name 'capability_diagnostics'
             artifact_status = Get-PropValue -Object $Normalized -Name 'artifact_status'
             cost = Get-PropValue -Object $Normalized -Name 'cost'
             approval = @{ approvedBy = Protect-Text $ApprovedBy; approvalReason = Protect-Text $ApprovalReason }
@@ -497,6 +533,15 @@ $projectRoot = Resolve-FullPath (Join-Path $agentsRoot '..')
 $runInfo = New-RunDirectory -AgentsRoot $agentsRoot -ProjectRoot $projectRoot -RequestedRunId $RunId
 $runId = $runInfo.runId
 $runDir = $runInfo.runDir
+$projectContextSnapshotPath = $null
+if (-not [string]::IsNullOrWhiteSpace($ProjectContextSnapshotFile)) {
+    $snapshotSource = Resolve-FullPath $ProjectContextSnapshotFile
+    if (-not (Test-IsPathInside -Child $snapshotSource -Parent $projectRoot)) { throw "ProjectContextSnapshotFile must be inside the project root. File=$snapshotSource ProjectRoot=$projectRoot" }
+    if (-not (Test-Path -LiteralPath $snapshotSource -PathType Leaf)) { throw "ProjectContextSnapshotFile was not found: $snapshotSource" }
+    $projectContextSnapshotPath = Join-Path $runDir 'project-context-snapshot.json'
+    Copy-Item -LiteralPath $snapshotSource -Destination $projectContextSnapshotPath -Force
+    $ContextFiles += $projectContextSnapshotPath
+}
 $stdoutPath = Join-Path $runDir 'claude-output.json'
 $eventStreamPath = Join-Path $runDir 'claude-events.jsonl'
 $stderrPath = Join-Path $runDir 'claude-error.txt'
@@ -632,6 +677,7 @@ Project-local discovery context:
 Efficiency limits:
 - Keep output concise JSON. Do not quote full file contents.
 - Prefer the provided context files before broad searches.
+- In plan mode, when a context file named project-context-snapshot.json is provided, successfully Read it before inspecting or proposing project files. It is a Runtime-generated, read-only inventory of the bound project workspace; it does not modify the user project.
 - Resource limits: use at most $MaxTurns assistant turns, read at most $MaxFilesRead files, and run at most $MaxCommands shell commands.
 - In plan mode, begin with files named by the task, then follow only direct dependencies needed to answer it. Avoid unrelated repository-wide exploration.
 - In plan mode, when the task identifies a target directory, list it once and read the relevant files that actually exist. Do not probe guessed README, package, src, or alternate paths unless an observed file directly requires them.
@@ -639,10 +685,12 @@ Efficiency limits:
 - Reserve enough time and budget to produce the required final JSON. If the remaining boundary is insufficient, stop exploring and report the limitation in "risks" or "blocked_on".
 
 Final response audit contract (mandatory in plan, review, and run modes):
+- StructuredOutput is the terminal audit submission, not a scratchpad. If that tool is available, call it exactly once, only after every Read/Write/Edit and verification step is finished. Never call it with placeholder, TODO, TBD, guessed, or provisional values, and never call any tool after a successful StructuredOutput submission.
 - Your final assistant message must be exactly one valid JSON object and nothing else.
 - Do not use a Markdown code fence. Do not add prose, headings, or explanations before or after the JSON object.
 - Report only actions that actually occurred. Do not claim a file read, command, change, or check unless you performed it.
-- "files_read" must list every file actually read. Put unmet approval or other blockers in "blocked_on" and stop.
+- "files_read" must list only files backed by successful Read-compatible tool results, including the Project Context Snapshot when it was successfully read. A failed Read, missing file, directory Read error, or denied tool call must never appear in "files_read".
+- Never claim guessed README, package.json, src, or other conventional paths as read. If neither the Project Context Snapshot nor successful discovery/read evidence can confirm project state, explain the evidence gap in "blocked_on" instead of guessing.
 
 Mode-specific audit rules:
 - plan: this mode analyzes the project and proposes an execution plan; it does not report completed implementation work.
@@ -655,6 +703,8 @@ Mode-specific audit rules:
 - review: if the task prompt does not identify the modified files or lacks enough plan/run context to verify the change, record the missing evidence in "blocked_on" instead of expanding the search scope.
 - review: stop after collecting bounded evidence for those checks and reserve time to emit the final JSON. Do not modify files; require the seven execution-audit fields, "changes_made" must be an empty array, and accurately report files read. "commands_run" must be an empty array because shell commands are not allowed.
 - run: set "run_result" to an object with "type" equal to "modified" or "noop". For "noop", also provide a specific non-empty "reason" explaining why no modification was necessary.
+- run: once any Write, Edit, or MultiEdit succeeds, the result is permanently "modified" for this Attempt. Later failures, incomplete work, or missing capabilities must never change it to "noop"; report the observed partial changes and blockers truthfully.
+- run: before the first modification, check the tools actually available to you. If the approved task requires creating a file but Write is unavailable, or otherwise cannot be completed with the available tools, do not leave a partial implementation; report the capability gap in "blocked_on".
 - run modified: "changes_made" must accurately list every modified file and must not be empty; "commands_run" must accurately list every executed command. Use an empty command array only when no command was executed.
 - run modified: Write, Edit, and MultiEdit results or returned file content are not verification evidence and do not count as reading a file.
 - run modified: after completing all writes and edits, use the Read tool once more on every file listed in "changes_made". Each final verification read must succeed and produce real Read "tool_use" and "tool_result" events before the final JSON is returned.
@@ -700,7 +750,7 @@ Required final JSON shapes (use the one for the current mode, replace values, an
 
     $arrayProperty = [ordered]@{ type = 'array'; items = [ordered]@{} }
     $auditProperties = [ordered]@{
-        summary = [ordered]@{ type = 'string'; minLength = 1 }
+        summary = [ordered]@{ type = 'string'; minLength = 1; pattern = '^(?!\s*(?:placeholder|todo|tbd)\s*$).+' }
         files_read = $arrayProperty
         proposed_changes = [ordered]@{ type = 'array'; items = [ordered]@{}; minItems = if ($Mode -eq 'plan') { 1 } else { 0 } }
         changes_made = $arrayProperty
@@ -720,7 +770,29 @@ Required final JSON shapes (use the one for the current mode, replace values, an
         'review' { @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on') }
         'run' { @('summary', 'files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on', 'run_result') }
     }
-    $auditJsonSchema = [ordered]@{ type = 'object'; properties = $auditProperties; required = $auditRequired; additionalProperties = $false } | ConvertTo-Json -Depth 10 -Compress
+    $auditJsonSchemaObject = [ordered]@{ type = 'object'; properties = $auditProperties; required = $auditRequired; additionalProperties = $false }
+    if ($Mode -eq 'run') {
+        $auditJsonSchemaObject['allOf'] = @(
+            [ordered]@{
+                if = [ordered]@{ properties = [ordered]@{ run_result = [ordered]@{ properties = [ordered]@{ type = [ordered]@{ const = 'modified' } } } } }
+                then = [ordered]@{ properties = [ordered]@{
+                    files_read = [ordered]@{ minItems = 1 }
+                    changes_made = [ordered]@{ minItems = 1 }
+                    tests_or_checks = [ordered]@{ minItems = 1 }
+                } }
+            },
+            [ordered]@{
+                if = [ordered]@{ properties = [ordered]@{ run_result = [ordered]@{ properties = [ordered]@{ type = [ordered]@{ const = 'noop' } } } } }
+                then = [ordered]@{ properties = [ordered]@{
+                    files_read = [ordered]@{ minItems = 1 }
+                    changes_made = [ordered]@{ maxItems = 0 }
+                    tests_or_checks = [ordered]@{ minItems = 1 }
+                    run_result = [ordered]@{ required = @('type', 'reason'); properties = [ordered]@{ reason = [ordered]@{ type = 'string'; minLength = 1 } } }
+                } }
+            }
+        )
+    }
+    $auditJsonSchema = $auditJsonSchemaObject | ConvertTo-Json -Depth 14 -Compress
     $auditJsonSchemaCli = $auditJsonSchema -replace '"', '\"'
 
     $claudeArgs = @()
@@ -852,6 +924,9 @@ Required final JSON shapes (use the one for the current mode, replace values, an
     $runResultReason = ([string](Get-PropValue -Object $runResult -Name 'reason')).Trim()
     $toolAudit = Get-ToolAudit -Events $streamEvents
     Save-Json -Value $toolAudit -Path $toolEventsPath -Depth 20
+    $capabilityDiagnostics = Get-CapabilityDiagnostics -Events $streamEvents -AllowedTools @($modePolicy.allowedTools)
+    $capabilityDiagnosticsPath = Join-Path $runDir 'capability-diagnostics.json'
+    Save-Json -Value $capabilityDiagnostics -Path $capabilityDiagnosticsPath -Depth 10
     $successfulCalls = @($toolAudit.tool_calls | Where-Object { $_.succeeded -eq $true -and $_.denied -ne $true })
     $successfulTools = @($successfulCalls | ForEach-Object { $_.tool } | Select-Object -Unique)
     $successfulCommands = @($successfulCalls | Where-Object { $_.tool -match '^(Bash|Shell)$' } | ForEach-Object { [string](Get-PropValue -Object $_.input -Name 'command') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -866,6 +941,14 @@ Required final JSON shapes (use the one for the current mode, replace values, an
         costUsd = $cost
     }
     $auditIssues = @()
+    $successfulStructuredOutputCalls = @($successfulCalls | Where-Object { $_.tool -eq 'StructuredOutput' })
+    if ($successfulStructuredOutputCalls.Count -gt 0) {
+        $firstStructuredOutputIndex = [int]$successfulStructuredOutputCalls[0].call_index
+        $laterSuccessfulCalls = @($successfulCalls | Where-Object { $_.call_index -gt $firstStructuredOutputIndex })
+        if ($laterSuccessfulCalls.Count -gt 0) {
+            $auditIssues += 'premature_audit_output:tool_call_after_structured_output'
+        }
+    }
     $requiredFields = if ($Mode -eq 'plan') {
         @('summary', 'files_read', 'proposed_changes', 'risks', 'blocked_on')
     } else {
@@ -999,6 +1082,8 @@ Required final JSON shapes (use the one for the current mode, replace values, an
     } elseif ($upstreamWorkerFailed) {
         $summary = 'Claude worker terminated before completing the task.'
         @{ code = 'worker_crash'; message = $errorMessage }
+    } elseif ($auditIssues -contains 'premature_audit_output:tool_call_after_structured_output') {
+        @{ code = 'premature_audit_output'; message = ($auditIssues -join ', ') }
     } elseif ($auditIssues.Count -gt 0) {
         @{ code = 'audit_validation_failed'; message = ($auditIssues -join ', ') }
     } elseif ($status -ne 'success') {
@@ -1006,12 +1091,16 @@ Required final JSON shapes (use the one for the current mode, replace values, an
         @{ code = 'worker_blocked'; message = $blockedMessage }
     } else { $null }
     $supervisorNotes = @()
+    if ($capabilityDiagnostics.mismatch) {
+        $missingToolText = @($capabilityDiagnostics.missingAllowedTools) -join ', '
+        $supervisorNotes += "Claude CLI capability mismatch: policy allowed tools were not exposed by the initialized Worker: $missingToolText."
+    }
     $artifactStatus = if ($status -eq 'success') { 'worker_reported_success' } else { 'worker_failed_no_artifact_claim' }
     if ($auditIssues.Count -gt 0) {
         $artifactStatus = 'worker_output_needs_review'
         $supervisorNotes += "Worker output did not meet the audit contract: $($auditIssues -join ', ')."
     }
-    if ($status -ne 'success' -and (($filesRead.Count -gt 0) -or ($changesMade.Count -gt 0) -or ($testsOrChecks.Count -gt 0))) {
+    if ($status -ne 'success' -and (($filesRead.Count -gt 0) -or ($changesMade.Count -gt 0) -or ($testsOrChecks.Count -gt 0) -or ($successfulWriteCalls.Count -gt 0))) {
         $artifactStatus = 'unvalidated_partial_artifacts_possible'
         $supervisorNotes += 'Worker failed but reported files, changes, or checks. Treat artifacts as untrusted partial output until Codex validates them independently.'
         if ($risksFromWorker -notcontains 'Partial artifacts may exist despite worker failure.') {
@@ -1034,8 +1123,9 @@ Required final JSON shapes (use the one for the current mode, replace values, an
         -ObservedFileTargets $toolAudit.file_targets `
         -AuditIssues $auditIssues `
         -SupervisorNotes $supervisorNotes `
+        -CapabilityDiagnostics $capabilityDiagnostics `
         -ArtifactStatus $artifactStatus `
-        -Cost $cost -ResourceUsage $resourceUsage -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_events = $eventStreamPath; raw_error = $stderrPath; tool_events = $toolEventsPath } -ErrorObject $err
+        -Cost $cost -ResourceUsage $resourceUsage -Artifacts @{ run_dir = $runDir; raw_output = $stdoutPath; raw_events = $eventStreamPath; raw_error = $stderrPath; tool_events = $toolEventsPath; capability_diagnostics = $capabilityDiagnosticsPath; project_context_snapshot = $projectContextSnapshotPath } -ErrorObject $err
     Complete-Run -RunDir $runDir -RunId $runId -Mode $Mode -ProjectRoot $projectRoot -ExitCodes $ExitCodes -Status $status -Normalized $normalized -RawOutputPath $stdoutPath -ErrorPath $stderrPath -ClaudeExitCode $claudeExitCode
 } catch {
     $message = $_.Exception.Message

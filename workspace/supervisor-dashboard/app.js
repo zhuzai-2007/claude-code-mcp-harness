@@ -1,14 +1,20 @@
 import { refreshDelay } from "./refresh-policy.mjs";
 import { detectLanguage, translate } from "./i18n.mjs";
-import { defaultStageView, groupWorkflowsByFolder, isStageViewable, sortEventsNewestFirst, stageViewForRole } from "./dashboard-model.mjs";
+import { defaultStageView, groupProjects, groupProjectWorkflows, isStageViewable, sortEventsNewestFirst, stageViewForRole, workflowsForProjectScope } from "./dashboard-model.mjs";
+import { fetchDashboardJson } from "./dashboard-request.mjs";
 
 const $ = (id) => document.getElementById(id);
 const ACTIVE = new Set(["created", "queued", "planning", "planned", "waiting_approval", "running", "reviewing"]);
 const TERMINAL = new Set(["completed", "succeeded", "failed"]);
 let workflows = [];
-let folders = [];
 let projects = [];
 let selectedProjectId = localStorage.getItem("supervisor.selectedProjectId") || null;
+let projectScope = localStorage.getItem("supervisor.projectScope") || "project";
+if (projectScope === "legacy") {
+  projectScope = "project";
+  localStorage.setItem("supervisor.projectScope", projectScope);
+  localStorage.removeItem("supervisor.legacyWorkflowsOpen");
+}
 let selectedWorkflowId = null;
 let selectedWorkflow = null;
 let selectedReviewPackage = null;
@@ -18,22 +24,24 @@ let selectedArtifacts = null;
 let projectView = "brief";
 let selectedStageView = null;
 let heroView = "timeline";
-let recentCollapsed = localStorage.getItem("supervisor.recentCollapsed") === "true";
 let renderedWorkflowId = null;
 let timer = null;
 let actionPending = false;
+let mutationPending = false;
 let preflightPending = false;
-let pendingDecision = null;
 let latestPreflight = null;
+let settingsSnapshot = null;
+let refreshGeneration = 0;
+let projectContinuityLoadedAt = 0;
+let projectContinuityProjectId = null;
 let language = detectLanguage({ stored: localStorage.getItem("supervisor.language"), languages: navigator.languages });
-let openFolderIds = (() => {
-  try { return new Set(JSON.parse(localStorage.getItem("supervisor.openFolders") || '["default"]')); }
-  catch { return new Set(["default"]); }
+let theme = ["light", "dark"].includes(localStorage.getItem("supervisor.theme")) ? localStorage.getItem("supervisor.theme") : "system";
+let expandedProjectIds = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem("supervisor.expandedProjects") || "[]")); }
+  catch { return new Set(); }
 })();
-// Archived sessions start collapsed on every Dashboard load. Their expansion is
-// intentionally session-local so an old browser preference cannot make a
-// folder look as if archived work belongs in the active list.
-let openArchiveFolderIds = new Set();
+let openWorkflowArchiveProjectIds = new Set();
+let archivedProjectsOpen = localStorage.getItem("supervisor.archivedProjectsOpen") === "true";
 
 const t = (key, parameters) => translate(language, key, parameters);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[char]);
@@ -51,6 +59,30 @@ function renderStaticTranslations() {
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
   document.querySelectorAll("[data-i18n-title]").forEach((node) => { node.title = t(node.dataset.i18nTitle); });
+  $("entry-project-select").setAttribute("aria-label", t("entry.project"));
+  const themeOptions = { system: language === "zh-CN" ? "跟随系统" : "System", light: language === "zh-CN" ? "浅色" : "Light", dark: language === "zh-CN" ? "深色" : "Dark" };
+  for (const option of $("theme-switch").options) option.textContent = themeOptions[option.value];
+}
+
+function applyTheme() {
+  if (theme === "system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.dataset.theme = theme;
+  $("theme-switch").value = theme;
+}
+
+function selectProjectScope(scope, projectId = null) {
+  projectScope = scope;
+  selectedProjectId = scope === "project" ? projectId : null;
+  if (selectedProjectId) expandedProjectIds.add(selectedProjectId);
+  localStorage.setItem("supervisor.expandedProjects", JSON.stringify([...expandedProjectIds]));
+  localStorage.setItem("supervisor.projectScope", scope);
+  if (selectedProjectId) localStorage.setItem("supervisor.selectedProjectId", selectedProjectId);
+  selectedWorkflowId = null;
+  selectedStageView = null;
+  projectView = "brief";
+  projectContinuityLoadedAt = 0;
+  renderProjects();
+  renderSelectedWorkflow().catch(showError);
 }
 
 function resourceEstimateHtml(estimate) {
@@ -60,16 +92,119 @@ function resourceEstimateHtml(estimate) {
   return `<div class="resource-forecast"><span><strong>${escapeHtml(estimate.complexity || "unknown")}</strong>${language === "zh-CN" ? "复杂度" : "complexity"}</span><span><strong>${formatCost(expected.budgetUsd)}</strong>${language === "zh-CN" ? "预计成本" : "expected cost"}</span><span><strong>${expected.turns || 0}</strong>${language === "zh-CN" ? "预计 turns" : "expected turns"}</span><span><strong>${expected.filesRead || 0}</strong>${language === "zh-CN" ? "预计读取" : "expected reads"}</span><span><strong>${formatCost(hard.budgetUsd)}</strong>${language === "zh-CN" ? "硬上限" : "hard caps"}</span><span><strong>${hard.timeoutSeconds || 0}s</strong>${language === "zh-CN" ? "阶段最长时间" : "max stage time"}</span></div>${listHtml(estimate.notes)}`;
 }
 
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, { cache: "no-store", ...options });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) { const error = new Error(payload.error || `${response.status} ${response.statusText}`); error.payload = payload; error.status = response.status; throw error; }
-  return payload;
+async function requestJson(url, { timeoutMs = 15000, ...options } = {}) {
+  return fetchDashboardJson(url, { timeoutMs, language, ...options });
 }
-const sendJson = (method, url, body) => requestJson(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-const postJson = (url, body) => sendJson("POST", url, body);
+const sendJson = (method, url, body, options = {}) => requestJson(url, { ...options, method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const postJson = (url, body, options = {}) => sendJson("POST", url, body, options);
 
 function setMessage(message, tone = "info") { $("action-message").textContent = message || ""; $("action-message").dataset.tone = tone; }
+function setDialogMessage(id, message = "", tone = "info") { const node = $(id); node.textContent = message; node.dataset.tone = tone; }
+function setFormBusy(form, busy) { form.setAttribute("aria-busy", String(busy)); form.querySelectorAll("button,input,select,textarea").forEach((control) => { if (busy) { control.dataset.wasDisabled = String(control.disabled); control.disabled = true; } else { control.disabled = control.dataset.wasDisabled === "true"; delete control.dataset.wasDisabled; } }); }
+async function runDialogMutation({ form, messageId, operation }) {
+  if (mutationPending) return null;
+  mutationPending = true;
+  setDialogMessage(messageId, language === "zh-CN" ? "正在保存…" : "Saving…");
+  setFormBusy(form, true);
+  try { return await operation(); }
+  catch (error) { setDialogMessage(messageId, error.message, "error"); setMessage(error.message, "error"); return null; }
+  finally { mutationPending = false; setFormBusy(form, false); }
+}
+
+const RESOURCE_FIELD_LABELS = {
+  maxBudgetUsd: { en: "Budget (USD)", zh: "预算（美元）" },
+  maxTurns: { en: "Maximum turns", zh: "最大 turns" },
+  maxFilesRead: { en: "Files read", zh: "读取文件数" },
+  maxCommands: { en: "Commands", zh: "命令数" },
+  timeoutSeconds: { en: "Timeout (seconds)", zh: "超时（秒）" }
+};
+
+function localizedLabel(labels) { return language === "zh-CN" ? labels.zh : labels.en; }
+function resourceInput({ owner, field, value, maximum, absolute = null }) {
+  const step = field === "maxBudgetUsd" ? "0.1" : "1";
+  const detail = absolute === null
+    ? (language === "zh-CN" ? `安全锁：${maximum}` : `Locked at ${maximum}`)
+    : (language === "zh-CN" ? `代码上限：${absolute}` : `Immutable cap ${absolute}`);
+  return `<label class="resource-field"><span>${escapeHtml(localizedLabel(RESOURCE_FIELD_LABELS[field]))}</span><input type="number" min="${step}" step="${step}" max="${escapeHtml(absolute ?? maximum)}" value="${escapeHtml(value)}" data-resource-owner="${escapeHtml(owner)}" data-resource-field="${field}" required><small>${escapeHtml(detail)}</small></label>`;
+}
+
+function renderSettings(settings) {
+  settingsSnapshot = settings;
+  const resources = settings.resources;
+  $("settings-default-profile").innerHTML = Object.keys(resources.profiles).map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  $("settings-default-profile").value = resources.defaultProfile;
+  $("settings-hard-limits").innerHTML = Object.keys(RESOURCE_FIELD_LABELS).map((field) => resourceInput({ owner: "hardLimits", field, value: resources.hardLimits[field], maximum: resources.absoluteLimits[field], absolute: resources.absoluteLimits[field] })).join("");
+  $("settings-profiles").innerHTML = Object.entries(resources.profiles).map(([name, profile]) => `<article class="resource-profile-card"><div class="resource-profile-heading"><strong>${escapeHtml(name)}</strong>${name === resources.defaultProfile ? `<span>${language === "zh-CN" ? "默认" : "Default"}</span>` : ""}</div><div class="resource-fields">${Object.keys(RESOURCE_FIELD_LABELS).map((field) => resourceInput({ owner: `profile:${name}`, field, value: profile[field], maximum: resources.hardLimits[field] })).join("")}</div></article>`).join("");
+
+  const runtime = settings.runtime || {};
+  const retention = runtime.retention;
+  const safetyItems = language === "zh-CN"
+    ? ["显式人工审批", "严格审计契约", "Side-effect Guard", "网络 / Git 写入 / 递归删除默认禁止"]
+    : ["Explicit human approval", "Strict audit contract", "Side-effect Guard", "Network / Git writes / recursive deletion denied by default"];
+  const runtimeFacts = [
+    `${language === "zh-CN" ? "最大并发 Task" : "Concurrent Tasks"}: ${runtime.maxConcurrentTasks ?? "—"}`,
+    `${language === "zh-CN" ? "心跳 / 停滞阈值" : "Heartbeat / stalled threshold"}: ${runtime.heartbeatSeconds ?? "—"}s / ${runtime.stalledAfterSeconds ?? "—"}s`,
+    retention ? `${language === "zh-CN" ? "数据保留" : "Retention"}: ${retention.enabled === false ? (language === "zh-CN" ? "关闭" : "off") : `${retention.maxAgeDays ?? "—"} ${language === "zh-CN" ? "天" : "days"}`} · ${language === "zh-CN" ? "启动时应用" : "applied at startup"}` : null
+  ].filter(Boolean);
+  $("settings-runtime").innerHTML = `<div class="governance-card"><strong>${language === "zh-CN" ? "固定安全边界" : "Locked safety boundaries"}</strong><ul>${safetyItems.map((item) => `<li><span aria-hidden="true">✓</span>${escapeHtml(item)}</li>`).join("")}</ul></div><div class="governance-card"><strong>${language === "zh-CN" ? "运行参数（只读）" : "Runtime parameters (read-only)"}</strong><ul>${runtimeFacts.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+}
+
+async function openSettingsDialog() {
+  setDialogMessage("settings-message", language === "zh-CN" ? "正在读取设置…" : "Loading settings…");
+  $("settings-dialog").showModal();
+  setFormBusy($("settings-form"), true);
+  try {
+    const payload = await requestJson("/api/supervisor/settings");
+    renderSettings(payload.settings);
+    setDialogMessage("settings-message");
+  } catch (error) {
+    setDialogMessage("settings-message", error.message, "error");
+  } finally { setFormBusy($("settings-form"), false); }
+}
+
+function collectResourceSettings() {
+  if (!settingsSnapshot) throw new Error(language === "zh-CN" ? "设置尚未加载。" : "Settings have not loaded.");
+  const resources = settingsSnapshot.resources;
+  const next = { defaultProfile: $("settings-default-profile").value, hardLimits: {}, profiles: {} };
+  for (const name of Object.keys(resources.profiles)) next.profiles[name] = {};
+  for (const input of $("settings-form").querySelectorAll("[data-resource-owner]")) {
+    const value = Number(input.value);
+    if (input.dataset.resourceOwner === "hardLimits") next.hardLimits[input.dataset.resourceField] = value;
+    else next.profiles[input.dataset.resourceOwner.slice("profile:".length)][input.dataset.resourceField] = value;
+  }
+  return next;
+}
+
+function setArchivedProjectsOpen(open) {
+  archivedProjectsOpen = Boolean(open);
+  localStorage.setItem("supervisor.archivedProjectsOpen", String(archivedProjectsOpen));
+  $("archived-projects").open = archivedProjectsOpen;
+}
+
+async function restoreArchivedProject(projectId, button) {
+  if (mutationPending) return;
+  mutationPending = true;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = language === "zh-CN" ? "恢复中…" : "Restoring…";
+  try {
+    const payload = await sendJson("PATCH", `/api/supervisor/projects/${encodeURIComponent(projectId)}`, { archived: false });
+    selectedProjectId = payload.project.projectId;
+    projectScope = "project";
+    expandedProjectIds.add(selectedProjectId);
+    projectContinuityLoadedAt = 0;
+    localStorage.setItem("supervisor.selectedProjectId", selectedProjectId);
+    localStorage.setItem("supervisor.projectScope", projectScope);
+    localStorage.setItem("supervisor.expandedProjects", JSON.stringify([...expandedProjectIds]));
+    setMessage(language === "zh-CN" ? `Project“${payload.project.name}”已恢复到活动列表。` : `Project “${payload.project.name}” was restored to Active Projects.`, "success");
+    await refresh();
+  } catch (error) {
+    setMessage(error.message, "error");
+  } finally {
+    mutationPending = false;
+    if (button.isConnected) { button.disabled = false; button.textContent = originalText; }
+  }
+}
 
 function renderPreflight(result) {
   latestPreflight = result;
@@ -88,12 +223,6 @@ function renderOverview() {
   const failed = workflows.filter((workflow) => workflow.status === "failed").length;
   const cost = workflows.reduce((total, workflow) => total + Number(workflow.product?.totalCostUsd || 0), 0);
   $("overview").innerHTML = `<div class="overview-card"><span>${t("overview.active")}</span><strong>${active}</strong><small>${t("overview.activeHint")}</small></div><div class="overview-card ${approvals ? "attention" : ""}"><span>${t("overview.approval")}</span><strong>${approvals}</strong><small>${t("overview.approvalHint")}</small></div><div class="overview-card"><span>${t("overview.completed")}</span><strong>${completed}</strong><small>${t("overview.completedHint")}</small></div><div class="overview-card ${failed ? "warning" : ""}"><span>${t("overview.failed")}</span><strong>${failed}</strong><small>${t("overview.failedHint")}</small></div><div class="overview-card"><span>${t("overview.cost")}</span><strong>${formatCost(cost)}</strong><small>${t("overview.costHint")}</small></div>`;
-}
-
-function applyRecentVisibility() {
-  $("console-grid").classList.toggle("recent-collapsed", recentCollapsed);
-  document.querySelector(".recent-panel").classList.toggle("hidden", recentCollapsed);
-  $("show-recent").classList.toggle("hidden", !recentCollapsed);
 }
 
 function applyHeroView() {
@@ -142,65 +271,89 @@ function renderProjectOverviewContent() {
   }
 }
 
-async function renderProjectOverview() {
+async function renderProjectOverview({ force = false, generation = null } = {}) {
   if (!selectedProjectId) { $("project-overview").classList.add("hidden"); return; }
-  const payload = await requestJson(`/api/supervisor/projects/${encodeURIComponent(selectedProjectId)}/continuity`);
-  selectedProjectContinuity = payload.context;
+  const requestedProjectId = selectedProjectId;
+  if (generation !== null && generation !== refreshGeneration) return;
+  const cacheFresh = !force && selectedProjectContinuity && projectContinuityProjectId === selectedProjectId && Date.now() - projectContinuityLoadedAt < 5000;
+  if (!cacheFresh) {
+    const payload = await requestJson(`/api/supervisor/projects/${encodeURIComponent(requestedProjectId)}/continuity`);
+    if (requestedProjectId !== selectedProjectId || (generation !== null && generation !== refreshGeneration)) return;
+    selectedProjectContinuity = payload.context;
+    projectContinuityProjectId = selectedProjectId;
+    projectContinuityLoadedAt = Date.now();
+  }
+  const context = selectedProjectContinuity;
   $("workflow-empty").classList.add("hidden"); $("workflow-detail").classList.add("hidden"); $("project-overview").classList.remove("hidden");
-  $("project-overview-name").textContent = payload.context.project.name;
-  $("project-overview-description").textContent = payload.context.project.description || payload.context.project.workspacePath;
-  $("project-overview-status").innerHTML = badge(payload.context.health?.status || payload.context.brief.currentStatus);
+  $("project-overview-name").textContent = context.project.name;
+  $("project-overview-description").textContent = context.project.description || context.project.workspacePath;
+  $("project-overview-status").innerHTML = badge(context.health?.status || context.brief.currentStatus);
   renderProjectOverviewContent();
+}
+
+function renderEntryProjectSelector(activeProjects, selectedProject) {
+  const select = $("entry-project-select");
+  const signature = `${language}:${activeProjects.map((project) => `${project.projectId}:${project.name}`).join("|")}`;
+  if (select.dataset.signature !== signature) {
+    const emptyLabel = language === "zh-CN" ? "选择一个活动 Project" : "Select an active Project";
+    select.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>${activeProjects.map((project) => `<option value="${escapeHtml(project.projectId)}">${escapeHtml(project.name)}</option>`).join("")}`;
+    select.dataset.signature = signature;
+  }
+  select.value = selectedProject?.projectId || "";
+  select.disabled = !activeProjects.length || actionPending;
 }
 
 function renderProjects() {
   $("project-count").textContent = String(projects.length);
-  const allClass = selectedProjectId ? "" : " active";
-  $("project-list").innerHTML = `<button class="project-chip${allClass}" type="button" data-project-id=""><strong>${escapeHtml(t("projects.all"))}</strong><span>${workflows.length}</span></button>${projects.map((project) => `<button class="project-chip${selectedProjectId === project.projectId ? " active" : ""}" type="button" data-project-id="${escapeHtml(project.projectId)}"><strong>${escapeHtml(project.name)}</strong><span>${project.sessionCount || 0}</span></button>`).join("")}`;
+  const grouped = groupProjects(projects);
+  if (grouped.archived.some((project) => project.projectId === selectedProjectId)) archivedProjectsOpen = true;
+  setArchivedProjectsOpen(archivedProjectsOpen);
+  const projectItem = (project) => {
+    const projectWorkflows = workflowsForProjectScope(workflows, { projectId: project.projectId });
+    const workflowGroups = groupProjectWorkflows(projectWorkflows);
+    const count = projectWorkflows.length;
+    const active = projectScope === "project" && selectedProjectId === project.projectId ? " active" : "";
+    const open = expandedProjectIds.has(project.projectId);
+    const activeWorkflows = workflowGroups.active.map(workflowListItem).join("") || (!workflowGroups.archived.length ? `<div class="project-workflow-empty">${escapeHtml(t("recent.empty"))}</div>` : "");
+    const archivedWorkflows = workflowGroups.archived.length ? `<details class="workflow-archive-group" data-workflow-archive="${escapeHtml(project.projectId)}"${openWorkflowArchiveProjectIds.has(project.projectId) ? " open" : ""}><summary><span>${escapeHtml(t("recent.archived"))}</span><strong>${workflowGroups.archived.length}</strong></summary><div>${workflowGroups.archived.map(workflowListItem).join("")}</div></details>` : "";
+    const restoreAction = project.archived ? `<button class="project-restore-button" type="button" data-restore-project="${escapeHtml(project.projectId)}">${escapeHtml(language === "zh-CN" ? "恢复" : "Restore")}</button>` : "";
+    return `<section class="project-node${active}${open ? " open" : ""}${project.archived ? " archived" : ""}" data-project-node="${escapeHtml(project.projectId)}"><div class="project-item"><button class="project-expand" type="button" data-toggle-project="${escapeHtml(project.projectId)}" aria-expanded="${open}" aria-label="${escapeHtml(open ? (language === "zh-CN" ? "收起 Project" : "Collapse Project") : (language === "zh-CN" ? "展开 Project" : "Expand Project"))}"><span>›</span></button><button class="project-item-main" type="button" data-project-id="${escapeHtml(project.projectId)}"><span class="project-mark" aria-hidden="true">${project.pinned ? "◆" : "◇"}</span><span><strong>${escapeHtml(project.name)}</strong><small>${escapeHtml(project.managed ? (language === "zh-CN" ? "受管 Project" : "Managed Project") : (language === "zh-CN" ? "系统 Project" : "System Project"))}</small></span><em>${count}</em></button>${restoreAction}<button class="project-item-action" type="button" data-manage-project="${escapeHtml(project.projectId)}" aria-label="${escapeHtml(language === "zh-CN" ? "管理 Project" : "Manage Project")}">•••</button></div><div class="project-workflows${open ? "" : " hidden"}">${activeWorkflows}${archivedWorkflows}</div></section>`;
+  };
+  $("active-project-list").innerHTML = grouped.active.map(projectItem).join("") || `<p class="project-empty">${escapeHtml(language === "zh-CN" ? "暂无活动 Project" : "No active Projects")}</p>`;
+  $("archived-project-list").innerHTML = grouped.archived.map(projectItem).join("") || `<p class="project-empty">${escapeHtml(language === "zh-CN" ? "暂无归档 Project" : "No archived Projects")}</p>`;
+  $("archived-project-count").textContent = String(grouped.archived.length);
+  $("global-archive-count").textContent = String(workflows.filter((workflow) => workflow.metadata?.archived).length);
+  $("global-archived-workflows").classList.toggle("active", projectScope === "global_archive");
+  const globalArchiveWorkflows = workflowsForProjectScope(workflows, { scope: "global_archive" });
+  $("global-archive-workflows-list").innerHTML = globalArchiveWorkflows.map(workflowListItem).join("") || `<div class="project-workflow-empty">${escapeHtml(t("recent.empty"))}</div>`;
   const selected = projects.find((project) => project.projectId === selectedProjectId);
   $("project-summary").classList.toggle("hidden", !selected);
   if (selected) {
-    const sessions = selected.sessions || [];
-    $("project-summary").innerHTML = `<div class="project-binding"><span><strong>${escapeHtml(t("projects.project"))}</strong>${escapeHtml(selected.name)}</span><span><strong>${escapeHtml(t("projects.workspace"))}</strong><code>${escapeHtml(selected.workspacePath)}</code></span><span><strong>${escapeHtml(t("projects.memory"))}</strong>${selected.memory?.available ? escapeHtml(formatTime(selected.memory.lastUpdated)) : escapeHtml(t("projects.memoryMissing"))}</span></div><div class="project-sessions"><div><strong>${escapeHtml(t("projects.sessions"))}</strong><span>${sessions.length}</span></div>${sessions.length ? sessions.map((session) => `<button type="button" data-project-session="${escapeHtml(session.sessionId)}"><span>${escapeHtml(session.name)}</span><small>${formatTime(session.updatedAt)}</small></button>`).join("") : `<p>${escapeHtml(t("projects.noSessions"))}</p>`}</div>`;
+    const workflowCount = workflows.filter((workflow) => workflowProjectId(workflow) === selected.projectId).length;
+    $("project-summary").innerHTML = `<strong>${escapeHtml(selected.name)}</strong><code title="${escapeHtml(selected.workspacePath)}">${escapeHtml(selected.workspacePath)}</code><span>${workflowCount} Workflow${workflowCount === 1 ? "" : "s"}</span>`;
   }
-  $("project-list").querySelectorAll("[data-project-id]").forEach((node) => node.addEventListener("click", () => {
-    selectedProjectId = node.dataset.projectId || null;
-    if (selectedProjectId) localStorage.setItem("supervisor.selectedProjectId", selectedProjectId); else localStorage.removeItem("supervisor.selectedProjectId");
-    selectedWorkflowId = null; selectedStageView = null; projectView = "brief";
-    renderProjects(); renderWorkflowList(); renderSelectedWorkflow().catch(showError);
+  const entryProject = projectScope === "project" ? selected : null;
+  renderEntryProjectSelector(grouped.active, entryProject && !entryProject.archived ? entryProject : null);
+  $("create-task").disabled = !entryProject || entryProject.archived || actionPending;
+  const tree = document.querySelector(".project-tree");
+  tree.querySelectorAll("[data-project-id]").forEach((node) => node.addEventListener("click", () => selectProjectScope("project", node.dataset.projectId)));
+  tree.querySelectorAll("[data-toggle-project]").forEach((node) => node.addEventListener("click", () => {
+    const projectId = node.dataset.toggleProject;
+    if (expandedProjectIds.has(projectId)) expandedProjectIds.delete(projectId); else expandedProjectIds.add(projectId);
+    localStorage.setItem("supervisor.expandedProjects", JSON.stringify([...expandedProjectIds]));
+    renderProjects();
   }));
-  $("project-summary").querySelectorAll("[data-project-session]").forEach((node) => node.addEventListener("click", () => {
-    const workflow = workflows.find((item) => item.sessionId === node.dataset.projectSession || item.product?.sessionId === node.dataset.projectSession);
-    if (workflow) { selectedWorkflowId = workflow.workflowId; selectedStageView = null; renderSelectedWorkflow().catch(showError); }
+  tree.querySelectorAll("[data-manage-project]").forEach((node) => node.addEventListener("click", () => openProjectDialog(node.dataset.manageProject)));
+  tree.querySelectorAll("[data-restore-project]").forEach((node) => node.addEventListener("click", () => restoreArchivedProject(node.dataset.restoreProject, node)));
+  tree.querySelectorAll("[data-workflow-archive]").forEach((node) => node.addEventListener("toggle", () => { if (node.open) openWorkflowArchiveProjectIds.add(node.dataset.workflowArchive); else openWorkflowArchiveProjectIds.delete(node.dataset.workflowArchive); }));
+  tree.querySelectorAll("[data-workflow-id]").forEach((node) => node.addEventListener("click", () => {
+    selectedWorkflowId = node.dataset.workflowId;
+    const boundProjectId = workflowProjectId(workflows.find((workflow) => workflow.workflowId === selectedWorkflowId));
+    if (boundProjectId) { selectedProjectId = boundProjectId; projectScope = "project"; expandedProjectIds.add(boundProjectId); localStorage.setItem("supervisor.selectedProjectId", boundProjectId); localStorage.setItem("supervisor.projectScope", "project"); localStorage.setItem("supervisor.expandedProjects", JSON.stringify([...expandedProjectIds])); }
+    selectedStageView = null;
+    renderSelectedWorkflow().catch(showError);
   }));
-}
-
-function persistOpenFolders() { localStorage.setItem("supervisor.openFolders", JSON.stringify([...openFolderIds])); }
-function folderLabel(folder) { return folder.system || folder.folderId === "default" ? t("folders.default") : folder.name; }
-function folderIcon(pinned, system = false) { if (system) return '<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="4" y="8" width="10" height="7" rx="2"/><path d="M6.5 8V6a2.5 2.5 0 0 1 5 0v2"/></svg>'; return pinned ? '<svg viewBox="0 0 18 18" aria-hidden="true"><path d="m6 3 6 0-.8 4 2 2H4.8l2-2zM9 9v6"/></svg>' : '<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M2.5 5.5h5l1.5 1.7h6.5v7.3h-13z"/></svg>'; }
-
-function renderWorkflowList() {
-  const visibleWorkflows = selectedProjectId ? workflows.filter((workflow) => workflowProjectId(workflow) === selectedProjectId) : workflows;
-  $("workflow-count").textContent = String(visibleWorkflows.length);
-  const grouped = groupWorkflowsByFolder(visibleWorkflows, folders);
-  $("workflow-list").innerHTML = grouped.map(({ folder, workflows: folderWorkflows }) => {
-    const folderId = folder.folderId;
-    const open = openFolderIds.has(folderId);
-    const activeWorkflows = folderWorkflows.filter((workflow) => !workflow.metadata?.archived);
-    const archivedWorkflows = folderWorkflows.filter((workflow) => workflow.metadata?.archived);
-    const archivesOpen = openArchiveFolderIds.has(folderId);
-    const actions = folder.system ? "" : `<div class="folder-actions"><button class="folder-action${folder.pinned ? " active" : ""}" data-pin-folder="${escapeHtml(folderId)}" type="button" title="${escapeHtml(t(folder.pinned ? "folders.unpin" : "folders.pin"))}">${folderIcon(true)}</button><button class="folder-action" data-rename-folder="${escapeHtml(folderId)}" type="button" title="${escapeHtml(t("folders.rename"))}"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="m4 13.5.7-3L11.8 3.4l2.8 2.8-7.1 7.1zM10.7 4.5l2.8 2.8"/></svg></button></div>`;
-    const activeContent = activeWorkflows.length ? activeWorkflows.map(workflowListItem).join("") : (!archivedWorkflows.length ? `<div class="folder-empty">${t("recent.groupEmpty")}</div>` : "");
-    const archivedContent = archivedWorkflows.length ? `<div class="folder-archive"><button class="archive-toggle" data-toggle-archives="${escapeHtml(folderId)}" type="button" aria-expanded="${archivesOpen}"><span class="archive-chevron">›</span><span>${t("recent.archived")}</span><strong>${archivedWorkflows.length}</strong></button><div class="archived-sessions${archivesOpen ? "" : " hidden"}">${archivedWorkflows.map(workflowListItem).join("")}</div></div>` : "";
-    const content = `${activeContent}${archivedContent}`;
-    return `<section class="workflow-folder${folder.pinned ? " pinned" : ""}${open ? " open" : ""}" data-folder-id="${escapeHtml(folderId)}"><div class="folder-heading"><button class="folder-toggle" data-toggle-folder="${escapeHtml(folderId)}" type="button" aria-expanded="${open}"><span class="folder-chevron">›</span><span class="folder-icon">${folderIcon(folder.pinned, folder.system)}</span><strong>${escapeHtml(folderLabel(folder))}</strong><span class="folder-count">${folderWorkflows.length}</span></button>${actions}</div><div class="folder-sessions${open ? "" : " hidden"}">${content}</div></section>`;
-  }).join("");
-  $("workflow-list").querySelectorAll("[data-workflow-id]").forEach((node) => node.addEventListener("click", () => { selectedWorkflowId = node.dataset.workflowId; selectedProjectId = workflowProjectId(workflows.find((workflow) => workflow.workflowId === selectedWorkflowId)) || selectedProjectId; if (selectedProjectId) localStorage.setItem("supervisor.selectedProjectId", selectedProjectId); selectedStageView = null; renderSelectedWorkflow().catch(showError); }));
-  $("workflow-list").querySelectorAll("[data-manage-workflow]").forEach((node) => node.addEventListener("click", () => openMetadataDialog(node.dataset.manageWorkflow)));
-  $("workflow-list").querySelectorAll("[data-toggle-folder]").forEach((node) => node.addEventListener("click", () => { const folderId = node.dataset.toggleFolder; if (openFolderIds.has(folderId)) openFolderIds.delete(folderId); else openFolderIds.add(folderId); persistOpenFolders(); renderWorkflowList(); }));
-  $("workflow-list").querySelectorAll("[data-toggle-archives]").forEach((node) => node.addEventListener("click", () => { const folderId = node.dataset.toggleArchives; if (openArchiveFolderIds.has(folderId)) openArchiveFolderIds.delete(folderId); else openArchiveFolderIds.add(folderId); renderWorkflowList(); }));
-  $("workflow-list").querySelectorAll("[data-pin-folder]").forEach((node) => node.addEventListener("click", async () => { const folder = folders.find((item) => item.folderId === node.dataset.pinFolder); if (!folder) return; try { await sendJson("PATCH", `/api/supervisor/folders/${encodeURIComponent(folder.folderId)}`, { pinned: !folder.pinned }); setMessage(t("folders.updated"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } }));
-  $("workflow-list").querySelectorAll("[data-rename-folder]").forEach((node) => node.addEventListener("click", () => openFolderDialog(node.dataset.renameFolder)));
+  tree.querySelectorAll("[data-manage-workflow]").forEach((node) => node.addEventListener("click", () => openMetadataDialog(node.dataset.manageWorkflow)));
 }
 
 function buildStageNodes(workflow) {
@@ -373,14 +526,17 @@ function renderArtifactCenter(artifacts) {
   $("artifact-center-content").innerHTML = sections.map(([title, value]) => `<section><h3>${escapeHtml(title)}</h3><pre>${escapeHtml(JSON.stringify(value ?? null, null, 2))}</pre></section>`).join("");
 }
 
-async function renderSelectedWorkflow() {
-  if (!selectedWorkflowId) { selectedReviewPackage = null; selectedProjectIntelligence = null; selectedArtifacts = null; if (selectedProjectId) return renderProjectOverview(); $("project-overview").classList.add("hidden"); $("workflow-empty").classList.remove("hidden"); $("workflow-detail").classList.add("hidden"); return; }
+async function renderSelectedWorkflow({ generation = null } = {}) {
+  if (!selectedWorkflowId) { selectedReviewPackage = null; selectedProjectIntelligence = null; selectedArtifacts = null; if (selectedProjectId) return renderProjectOverview({ generation }); $("project-overview").classList.add("hidden"); $("workflow-empty").classList.remove("hidden"); $("workflow-detail").classList.add("hidden"); return; }
+  const requestedWorkflowId = selectedWorkflowId;
   const [detailPayload, eventPayload, artifactPayload] = await Promise.all([requestJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}`), requestJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/events?limit=500`), requestJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/artifacts`)]);
+  if (requestedWorkflowId !== selectedWorkflowId || (generation !== null && generation !== refreshGeneration)) return;
   selectedWorkflow = detailPayload.workflow; const workflow = selectedWorkflow; const product = workflow.product || {};
   selectedArtifacts = artifactPayload.artifacts;
   if (TERMINAL.has(workflow.status)) {
     const reviewPayload = await requestJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/review-package`);
     const intelligencePayload = await requestJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/project-intelligence`);
+    if (requestedWorkflowId !== selectedWorkflowId || (generation !== null && generation !== refreshGeneration)) return;
     selectedReviewPackage = reviewPayload.reviewPackage;
     selectedProjectIntelligence = intelligencePayload.intelligence;
   } else { selectedReviewPackage = null; selectedProjectIntelligence = null; }
@@ -393,73 +549,146 @@ async function renderSelectedWorkflow() {
   $("workflow-status").innerHTML = badge(workflow.status);
   $("workflow-summary").innerHTML = `<div><span>${t("projects.project")}</span><strong>${escapeHtml(workflow.project?.name || workflow.projectId || t("common.unavailable"))}</strong></div><div><span>${t("projects.workspace")}</span><strong title="${escapeHtml(workflow.workspacePath || "")}">${escapeHtml(workflow.workspacePath || workflow.project?.workspacePath || workflow.project?.path || t("common.unavailable"))}</strong></div><div><span>${t("workflow.currentStage")}</span><strong>${escapeHtml(statusLabel(workflow.currentStage))}</strong></div><div><span>${t("workflow.elapsed")}</span><strong>${formatDuration(workflow.durationSeconds)}</strong></div><div><span>${t("workflow.cost")}</span><strong>${formatCost(product.totalCostUsd)}</strong></div><div><span>${t("workflow.updated")}</span><strong>${formatTime(workflow.updatedAt)}</strong></div>`;
   $("next-action").innerHTML = `<span>${t("workflow.next")}</span><strong>${escapeHtml(product.nextAction || t("workflow.wait"))}</strong>`;
-  renderDecision(workflow); renderApproval(workflow); renderImplementation(workflow); renderReview(workflow); renderSupervisorCollaboration(workflow, selectedReviewPackage, selectedProjectIntelligence); renderFailureRecovery(workflow); renderArtifactCenter(selectedArtifacts); renderTechnicalDetails(workflow, eventPayload.events || []); renderStageTimeline(workflow); applyHeroView(); renderWorkflowList();
+  renderDecision(workflow); renderApproval(workflow); renderImplementation(workflow); renderReview(workflow); renderSupervisorCollaboration(workflow, selectedReviewPackage, selectedProjectIntelligence); renderFailureRecovery(workflow); renderArtifactCenter(selectedArtifacts); renderTechnicalDetails(workflow, eventPayload.events || []); renderStageTimeline(workflow); applyHeroView(); renderProjects();
 }
 
 async function refresh() {
   clearTimeout(timer);
+  const generation = ++refreshGeneration;
   try {
-    const [payload, folderPayload, projectPayload, preflightPayload] = await Promise.all([requestJson("/api/supervisor/workflows?limit=200"), requestJson("/api/supervisor/folders"), requestJson("/api/supervisor/projects"), requestJson("/api/supervisor/provider-preflight")]);
-    workflows = payload.workflows || []; folders = folderPayload.folders || []; projects = projectPayload.projects || []; renderPreflight(preflightPayload.latest);
+    const [payload, projectPayload, preflightPayload] = await Promise.all([requestJson("/api/supervisor/workflows?limit=200"), requestJson("/api/supervisor/projects?compact=1"), requestJson("/api/supervisor/provider-preflight")]);
+    if (generation !== refreshGeneration) return;
+    workflows = payload.workflows || []; projects = projectPayload.projects || []; renderPreflight(preflightPayload.latest);
     if (selectedProjectId && !projects.some((project) => project.projectId === selectedProjectId)) { selectedProjectId = null; localStorage.removeItem("supervisor.selectedProjectId"); }
-    if (!selectedProjectId && projects.length) {
-      selectedProjectId = workflowProjectId(workflows.find((workflow) => !workflow.metadata?.archived) || workflows[0]) || projects[0].projectId;
+    if (projectScope === "project" && !selectedProjectId) {
+      const activeProjects = groupProjects(projects).active;
+      selectedProjectId = activeProjects[0]?.projectId || null;
+    }
+    if (selectedProjectId) {
       localStorage.setItem("supervisor.selectedProjectId", selectedProjectId);
     }
-    const projectWorkflows = selectedProjectId ? workflows.filter((workflow) => workflowProjectId(workflow) === selectedProjectId) : workflows;
-    if (selectedProjectId && selectedWorkflowId && !projectWorkflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) selectedWorkflowId = null;
+    const scopedWorkflows = workflowsForProjectScope(workflows, { scope: projectScope, projectId: selectedProjectId });
+    if (selectedWorkflowId && !scopedWorkflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) selectedWorkflowId = null;
     if (selectedWorkflowId && !workflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) selectedWorkflowId = null;
-    renderOverview(); renderProjects(); renderWorkflowList(); await renderSelectedWorkflow();
+    renderOverview(); renderProjects(); await renderSelectedWorkflow({ generation });
+    if (generation !== refreshGeneration) return;
     $("connection").textContent = t("connection.connected"); $("connection-dot").classList.add("online"); $("last-updated").textContent = t("connection.updated", { time: new Date().toLocaleTimeString(language) });
     timer = setTimeout(refresh, refreshDelay(workflows.some((workflow) => ACTIVE.has(workflow.status))));
-  } catch (error) { showError(error); timer = setTimeout(refresh, 4000); }
+  } catch (error) { if (generation !== refreshGeneration) return; showError(error); timer = setTimeout(refresh, 4000); }
 }
 
 function showError(error) { $("connection").textContent = t("connection.unavailable"); $("connection-dot").classList.remove("online"); $("last-updated").textContent = error.message; }
 
 function openMetadataDialog(workflowId) {
   const workflow = workflows.find((item) => item.workflowId === workflowId); if (!workflow) return;
+  setDialogMessage("workflow-metadata-message");
   $("workflow-metadata-form").dataset.workflowId = workflowId;
   $("metadata-display-name").value = workflow.metadata?.displayName || "";
-  $("metadata-folder").innerHTML = folders.map((folder) => `<option value="${escapeHtml(folder.folderId)}">${escapeHtml(folderLabel(folder))}</option>`).join("");
-  $("metadata-folder").value = workflow.metadata?.folderId || "default";
   $("metadata-archived").checked = Boolean(workflow.metadata?.archived);
+  $("metadata-archived").disabled = !workflow.metadata?.archived && !TERMINAL.has(workflow.status);
   $("workflow-metadata-dialog").showModal();
 }
 
-function updateFolderDialogTitle() { $("folder-dialog-title").textContent = t($("folder-form").dataset.folderId ? "folders.renameTitle" : "folders.newTitle"); $("delete-folder").textContent = t($("delete-folder").dataset.confirming === "true" ? "folders.confirmDelete" : "folders.delete"); }
-function openFolderDialog(folderId = null) {
-  const folder = folderId ? folders.find((item) => item.folderId === folderId && !item.system) : null;
-  if (folderId && !folder) return;
-  $("folder-form").dataset.folderId = folder?.folderId || "";
-  $("folder-name").value = folder?.name || "";
-  $("delete-folder").classList.toggle("hidden", !folder);
-  $("delete-folder").dataset.confirming = "false";
-  $("delete-folder").textContent = t("folders.delete");
-  $("folder-delete-note").classList.add("hidden");
-  updateFolderDialogTitle();
-  $("folder-dialog").showModal();
-  $("folder-name").focus();
+function openProjectDialog(projectId = null) {
+  const project = projectId ? projects.find((item) => item.projectId === projectId) : null;
+  if (projectId && !project) return;
+  setDialogMessage("project-dialog-message");
+  $("project-form").dataset.projectId = project?.projectId || "";
+  $("project-name").value = project?.name || "";
+  $("project-name").disabled = Boolean(project && !project.managed);
+  $("project-pin-row").classList.toggle("hidden", !project);
+  $("project-archive-row").classList.toggle("hidden", !project || project.system);
+  $("project-pinned").checked = Boolean(project?.pinned);
+  $("project-archived").checked = Boolean(project?.archived);
+  $("project-dialog-title").textContent = project ? (language === "zh-CN" ? "Project 设置" : "Project settings") : (language === "zh-CN" ? "新建 Project" : "New Project");
+  $("project-dialog-description").textContent = project ? (project.managed ? (language === "zh-CN" ? "重命名会同步变更 workspace 下的受管目录；Project ID 保持不变。" : "Renaming also moves the managed workspace directory; the Project ID stays stable.") : (language === "zh-CN" ? "系统 Project 的目录和名称不可修改。" : "A system Project path and name cannot be changed.")) : (language === "zh-CN" ? "目录仅会创建在 workspace 根目录下。" : "The directory is created only under the workspace root.");
+  $("project-managed-note").textContent = project?.workspacePath || (language === "zh-CN" ? "不会扫描或导入未注册目录。" : "Unregistered directories are never scanned or imported.");
+  $("project-dialog").showModal();
+  if (!$("project-name").disabled) $("project-name").focus();
 }
 
-$("language-switch").addEventListener("change", () => { language = $("language-switch").value; localStorage.setItem("supervisor.language", language); renderStaticTranslations(); updateFolderDialogTitle(); renderPreflight(latestPreflight); renderOverview(); renderProjects(); renderWorkflowList(); if (selectedWorkflowId) { renderedWorkflowId = null; renderSelectedWorkflow().catch(showError); } else if (selectedProjectContinuity) renderProjectOverviewContent(); });
+$("language-switch").addEventListener("change", () => { language = $("language-switch").value; localStorage.setItem("supervisor.language", language); renderStaticTranslations(); renderPreflight(latestPreflight); renderOverview(); renderProjects(); if ($("settings-dialog").open && settingsSnapshot) renderSettings(settingsSnapshot); if (selectedWorkflowId) { renderedWorkflowId = null; renderSelectedWorkflow().catch(showError); } else if (selectedProjectContinuity) renderProjectOverviewContent(); });
+$("theme-switch").addEventListener("change", () => { theme = $("theme-switch").value; if (theme === "system") localStorage.removeItem("supervisor.theme"); else localStorage.setItem("supervisor.theme", theme); applyTheme(); });
 document.querySelectorAll("[data-project-view]").forEach((node) => node.addEventListener("click", () => { projectView = node.dataset.projectView; renderProjectOverviewContent(); }));
 document.querySelectorAll("[data-hero-view]").forEach((node) => node.addEventListener("click", () => { heroView = node.dataset.heroView; applyHeroView(); }));
-$("hide-recent").addEventListener("click", () => { recentCollapsed = true; localStorage.setItem("supervisor.recentCollapsed", "true"); applyRecentVisibility(); });
-$("show-recent").addEventListener("click", () => { recentCollapsed = false; localStorage.setItem("supervisor.recentCollapsed", "false"); applyRecentVisibility(); });
-$("new-task-form").addEventListener("submit", async (event) => { event.preventDefault(); if (actionPending) return; const userRequest = $("user-request").value.trim(); if (!userRequest) return; actionPending = true; $("create-task").disabled = true; setMessage(t("message.creating")); try { const payload = await postJson("/api/supervisor/workflows", { userRequest }); selectedWorkflowId = payload.workflow.workflowId; selectedStageView = null; $("user-request").value = ""; setMessage(t("message.created"), "success"); await refresh(); } catch (error) { if (error.payload?.status === "project_confirmation_required") { pendingDecision = error.payload.decision; $("project-options").innerHTML = pendingDecision.projectResolution.candidates.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)} — ${escapeHtml(project.path)}</option>`).join(""); $("project-confirmation").classList.remove("hidden"); $("local-entry").open = true; setMessage(t("message.chooseProject")); } else setMessage(error.message, "error"); } finally { actionPending = false; $("create-task").disabled = false; } });
-$("confirm-project").addEventListener("click", async () => { if (actionPending || !pendingDecision) return; actionPending = true; try { const payload = await postJson("/api/supervisor/workflows", { userRequest: pendingDecision.originalRequest, decisionId: pendingDecision.decisionId, projectId: $("project-options").value }); selectedWorkflowId = payload.workflow.workflowId; selectedStageView = null; pendingDecision = null; $("project-confirmation").classList.add("hidden"); $("user-request").value = ""; setMessage(t("message.projectStarted"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } finally { actionPending = false; } });
-$("cancel-project").addEventListener("click", () => { pendingDecision = null; $("project-confirmation").classList.add("hidden"); setMessage(t("message.projectCancelled")); });
+$("entry-project-select").addEventListener("change", (event) => { if (event.currentTarget.value) selectProjectScope("project", event.currentTarget.value); });
+$("new-task-form").addEventListener("submit", async (event) => { event.preventDefault(); if (actionPending) return; const userRequest = $("user-request").value.trim(); const project = projects.find((item) => item.projectId === selectedProjectId && !item.archived); if (!userRequest || projectScope !== "project" || !project) { setMessage(language === "zh-CN" ? "请先选择一个活动 Project。" : "Select an active Project first.", "error"); return; } actionPending = true; $("create-task").disabled = true; setMessage(t("message.creating")); try { const payload = await postJson("/api/supervisor/workflows", { userRequest, projectId: project.projectId }); selectedWorkflowId = payload.workflow.workflowId; selectedStageView = null; $("user-request").value = ""; setMessage(t("message.created"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } finally { actionPending = false; renderProjects(); } });
 $("approval-form").addEventListener("submit", async (event) => { event.preventDefault(); if (actionPending || !selectedWorkflowId) return; const approvedBy = $("reviewer-name").value.trim(); const approvalReason = $("decision-reason").value.trim(); if (!approvedBy || !approvalReason) return; actionPending = true; renderApproval(selectedWorkflow); setMessage(t("message.approving")); try { await postJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/approve`, { approvedBy, approvalReason }); $("decision-reason").value = ""; setMessage(t("message.approved"), "success"); selectedStageView = "implementation"; await refresh(); } catch (error) { setMessage(error.message, "error"); } finally { actionPending = false; if (selectedWorkflow) renderApproval(selectedWorkflow); } });
 $("reject-workflow").addEventListener("click", async () => { if (actionPending || !selectedWorkflowId) return; const rejectedBy = $("reviewer-name").value.trim(); const rejectionReason = $("decision-reason").value.trim(); if (!rejectedBy || !rejectionReason) { setMessage(t("message.rejectMissing"), "error"); return; } if (!window.confirm(t("message.rejectConfirm"))) return; actionPending = true; renderApproval(selectedWorkflow); try { await postJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/reject`, { rejectedBy, rejectionReason }); $("decision-reason").value = ""; setMessage(t("message.rejected"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } finally { actionPending = false; if (selectedWorkflow) renderApproval(selectedWorkflow); } });
-$("run-preflight").addEventListener("click", async () => { if (preflightPending) return; preflightPending = true; renderPreflight(null); setMessage(t("message.probing")); try { const payload = await postJson("/api/supervisor/provider-preflight", { timeoutSeconds: 60 }); renderPreflight(payload.result); setMessage(t("message.probeOk"), "success"); } catch (error) { renderPreflight(error.payload?.result || { status: "failed", classification: "preflight_error", message: error.message, checkedAt: new Date().toISOString() }); setMessage(error.payload?.result?.message || error.message, "error"); } finally { preflightPending = false; renderPreflight(latestPreflight); } });
+$("run-preflight").addEventListener("click", async () => { if (preflightPending) return; preflightPending = true; renderPreflight(null); setMessage(t("message.probing")); try { const payload = await postJson("/api/supervisor/provider-preflight", { timeoutSeconds: 60 }, { timeoutMs: 70000 }); renderPreflight(payload.result); setMessage(t("message.probeOk"), "success"); } catch (error) { renderPreflight(error.payload?.result || { status: "failed", classification: "preflight_error", message: error.message, checkedAt: new Date().toISOString() }); setMessage(error.payload?.result?.message || error.message, "error"); } finally { preflightPending = false; renderPreflight(latestPreflight); } });
 $("recovery-form").addEventListener("submit", async (event) => { event.preventDefault(); if (actionPending || !selectedWorkflowId) return; const requestedBy = $("recovery-operator").value.trim(); const recoveryReason = $("recovery-reason").value.trim(); if (!requestedBy || !recoveryReason) return; actionPending = true; $("retry-workflow").disabled = true; setMessage(t("message.recovering")); try { const payload = await postJson(`/api/supervisor/workflows/${encodeURIComponent(selectedWorkflowId)}/retry`, { requestedBy, recoveryReason }); selectedWorkflowId = payload.workflow.workflowId; selectedStageView = null; $("recovery-reason").value = ""; setMessage(t("message.recovered"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } finally { actionPending = false; $("retry-workflow").disabled = false; } });
-$("workflow-metadata-form").addEventListener("submit", async (event) => { event.preventDefault(); const workflowId = event.currentTarget.dataset.workflowId; try { await sendJson("PATCH", `/api/supervisor/workflows/${encodeURIComponent(workflowId)}/metadata`, { displayName: $("metadata-display-name").value.trim() || null, archived: $("metadata-archived").checked, folderId: $("metadata-folder").value }); $("workflow-metadata-dialog").close(); setMessage(t("message.metadataSaved"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } });
-$("folder-form").addEventListener("submit", async (event) => { event.preventDefault(); const folderId = event.currentTarget.dataset.folderId; const name = $("folder-name").value.trim(); if (!name) return; try { const payload = folderId ? await sendJson("PATCH", `/api/supervisor/folders/${encodeURIComponent(folderId)}`, { name }) : await postJson("/api/supervisor/folders", { name }); const savedFolderId = payload.folder.folderId; openFolderIds.add(savedFolderId); persistOpenFolders(); $("folder-dialog").close(); setMessage(t(folderId ? "folders.updated" : "folders.created"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } });
-$("delete-folder").addEventListener("click", async () => { const button = $("delete-folder"); const folderId = $("folder-form").dataset.folderId; const folder = folders.find((item) => item.folderId === folderId); if (!folder) return; if (button.dataset.confirming !== "true") { button.dataset.confirming = "true"; button.textContent = t("folders.confirmDelete"); $("folder-delete-note").classList.remove("hidden"); return; } try { await requestJson(`/api/supervisor/folders/${encodeURIComponent(folderId)}`, { method: "DELETE" }); openFolderIds.delete(folderId); openFolderIds.add("default"); persistOpenFolders(); $("folder-dialog").close(); setMessage(t("folders.deleted"), "success"); await refresh(); } catch (error) { setMessage(error.message, "error"); } });
-$("create-folder").addEventListener("click", () => openFolderDialog());
+$("workflow-metadata-form").addEventListener("submit", async (event) => { event.preventDefault(); const form = event.currentTarget; const workflowId = form.dataset.workflowId; const archiveRequested = $("metadata-archived").checked; const payload = await runDialogMutation({ form, messageId: "workflow-metadata-message", operation: () => sendJson("PATCH", `/api/supervisor/workflows/${encodeURIComponent(workflowId)}/metadata`, { displayName: $("metadata-display-name").value.trim() || null, archived: archiveRequested }) }); if (!payload) return; const projectId = workflowProjectId(workflows.find((workflow) => workflow.workflowId === workflowId)); if (archiveRequested && projectId) openWorkflowArchiveProjectIds.add(projectId); $("workflow-metadata-dialog").close(); setMessage(t("message.metadataSaved"), "success"); await refresh(); });
+$("project-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const projectId = form.dataset.projectId;
+  const name = $("project-name").value.trim();
+  if (!name) return;
+  let update = null;
+  if (projectId) {
+    const project = projects.find((item) => item.projectId === projectId);
+    if (!project) { setDialogMessage("project-dialog-message", language === "zh-CN" ? "Project 已刷新，请关闭后重试。" : "The Project changed. Close this dialog and try again.", "error"); return; }
+    update = {};
+    if (project.pinned !== $("project-pinned").checked) update.pinned = $("project-pinned").checked;
+    if (!project.system && project.archived !== $("project-archived").checked) update.archived = $("project-archived").checked;
+    if (project.managed && project.name !== name) update.name = name;
+    if (!Object.keys(update).length) { $("project-dialog").close(); return; }
+  }
+  const payload = await runDialogMutation({ form, messageId: "project-dialog-message", operation: () => projectId ? sendJson("PATCH", `/api/supervisor/projects/${encodeURIComponent(projectId)}`, update) : postJson("/api/supervisor/projects", { name }) });
+  if (!payload) return;
+  selectedProjectId = payload.project.projectId;
+  projectScope = "project";
+  expandedProjectIds.add(selectedProjectId);
+  projectContinuityLoadedAt = 0;
+  localStorage.setItem("supervisor.selectedProjectId", selectedProjectId);
+  localStorage.setItem("supervisor.projectScope", projectScope);
+  localStorage.setItem("supervisor.expandedProjects", JSON.stringify([...expandedProjectIds]));
+  if (payload.project.archived) setArchivedProjectsOpen(true);
+  $("project-dialog").close();
+  const message = payload.project.archived
+    ? (language === "zh-CN" ? `Project“${payload.project.name}”已归档，仍保留在“归档 Project”中，可随时恢复。` : `Project “${payload.project.name}” was archived. It remains under Archived Projects and can be restored.`)
+    : projectId
+      ? (language === "zh-CN" ? `Project“${payload.project.name}”已更新。` : `Project “${payload.project.name}” was updated.`)
+      : (language === "zh-CN" ? `Project“${payload.project.name}”已创建。` : `Project “${payload.project.name}” was created.`);
+  setMessage(message, "success");
+  await refresh();
+  document.querySelector(`[data-project-node="${CSS.escape(payload.project.projectId)}"]`)?.scrollIntoView({ block: "nearest" });
+});
+$("create-project").addEventListener("click", () => openProjectDialog());
+$("archived-projects").addEventListener("toggle", () => { archivedProjectsOpen = $("archived-projects").open; localStorage.setItem("supervisor.archivedProjectsOpen", String(archivedProjectsOpen)); });
+for (const [id, scope, storageKey] of [["global-archived-workflows", "global_archive", "supervisor.globalArchiveOpen"]]) {
+  const group = $(id);
+  group.open = localStorage.getItem(storageKey) === "true";
+  group.addEventListener("toggle", () => {
+    localStorage.setItem(storageKey, String(group.open));
+    if (group.open && projectScope !== scope) selectProjectScope(scope);
+  });
+}
 $("metadata-close").addEventListener("click", () => $("workflow-metadata-dialog").close()); $("metadata-cancel").addEventListener("click", () => $("workflow-metadata-dialog").close());
-$("folder-close").addEventListener("click", () => $("folder-dialog").close()); $("folder-cancel").addEventListener("click", () => $("folder-dialog").close()); $("refresh").addEventListener("click", refresh);
+$("project-dialog-close").addEventListener("click", () => $("project-dialog").close()); $("project-dialog-cancel").addEventListener("click", () => $("project-dialog").close()); $("refresh").addEventListener("click", refresh);
+$("open-settings").addEventListener("click", openSettingsDialog);
+$("settings-close").addEventListener("click", () => $("settings-dialog").close());
+$("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
+$("settings-form").addEventListener("input", (event) => {
+  const input = event.target.closest('[data-resource-owner="hardLimits"]');
+  if (!input) return;
+  const field = input.dataset.resourceField;
+  const maximum = Number(input.value);
+  $("settings-form").querySelectorAll(`[data-resource-field="${field}"][data-resource-owner^="profile:"]`).forEach((profileInput) => {
+    profileInput.max = String(maximum);
+    profileInput.setCustomValidity(Number(profileInput.value) > maximum ? (language === "zh-CN" ? "档位值不能超过安全锁。" : "Profile value cannot exceed the safety lock.") : "");
+  });
+});
+$("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  const payload = await runDialogMutation({ form, messageId: "settings-message", operation: () => sendJson("PUT", "/api/supervisor/settings/resources", collectResourceSettings()) });
+  if (!payload) return;
+  settingsSnapshot = payload.settings;
+  $("settings-dialog").close();
+  setMessage(language === "zh-CN" ? "资源设置已保存，将用于之后新建的 Task。" : "Resource settings saved for future Tasks.", "success");
+});
 $("review-in-chatgpt").addEventListener("click", openChatGptReviewDialog);
 $("chatgpt-review-close").addEventListener("click", () => $("chatgpt-review-dialog").close());
 $("chatgpt-review-cancel").addEventListener("click", () => $("chatgpt-review-dialog").close());
@@ -491,4 +720,4 @@ $("memory-apply-form").addEventListener("submit", async (event) => {
   finally { actionPending = false; $("confirm-memory-apply").disabled = false; }
 });
 
-renderStaticTranslations(); renderPreflight(null); applyRecentVisibility(); applyHeroView(); refresh();
+renderStaticTranslations(); applyTheme(); renderPreflight(null); applyHeroView(); refresh();

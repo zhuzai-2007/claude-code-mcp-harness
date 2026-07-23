@@ -11,12 +11,15 @@ import { FileWorkflowStore } from "../runtime/file-workflow-store.mjs";
 import { FileSupervisorStore } from "../runtime/file-supervisor-store.mjs";
 import { HarnessRunner } from "../runtime/harness-runner.mjs";
 import { ProjectContextRegistry } from "../runtime/project-context.mjs";
+import { ProjectRegistryStore } from "../runtime/project-registry-store.mjs";
+import { ProjectWorkspaceService } from "../runtime/project-workspace-service.mjs";
 import { ProjectIntelligenceService } from "../runtime/project-intelligence.mjs";
 import { ProjectContinuityService } from "../runtime/project-continuity.mjs";
 import { ProviderPreflightService } from "../runtime/provider-preflight.mjs";
 import { SupervisorDecisionLayer } from "../runtime/supervisor-decision.mjs";
 import { SupervisorService } from "../runtime/supervisor-service.mjs";
 import { SupervisorReviewPackageService } from "../runtime/supervisor-review-package.mjs";
+import { SupervisorSettingsService } from "../runtime/supervisor-settings.mjs";
 import { applyRuntimeRetention, planRuntimeRetention } from "../runtime/runtime-retention.mjs";
 import { TaskRuntime } from "../runtime/task-runtime.mjs";
 import { WorkflowRuntime } from "../runtime/workflow-runtime.mjs";
@@ -24,6 +27,7 @@ import { loadWorkflowDefinitions } from "../runtime/workflow-definitions.mjs";
 import { WorkflowPlanner } from "../runtime/workflow-planner.mjs";
 import { resolveMcpResourceProfile, resourceProfileHarnessArgs } from "./resource-profile-input.mjs";
 import { registerSupervisorDashboardRoutes } from "./supervisor-dashboard-routes.mjs";
+import { resolveTaskProjectContext } from "./task-project-binding.mjs";
 import { WorkflowMetadataStore } from "./workflow-metadata-store.mjs";
 import { listWorkflowDefinitionCapabilities, unknownWorkflowDefinitionResult } from "./workflow-definition-capabilities.mjs";
 
@@ -67,14 +71,20 @@ const taskStore = new FileTaskStore(runtimeDataRoot);
 const workflowStore = new FileWorkflowStore(runtimeDataRoot);
 const supervisorStore = new FileSupervisorStore(runtimeDataRoot);
 const workflowMetadataStore = new WorkflowMetadataStore(runtimeDataRoot);
+const projectRegistryStore = new ProjectRegistryStore(runtimeDataRoot);
 const providerPreflight = new ProviderPreflightService({ runtimeDataRoot });
-await workflowMetadataStore.init();
+await Promise.all([workflowMetadataStore.init(), projectRegistryStore.init()]);
 const projectRegistry = new ProjectContextRegistry({
   projectRoot,
   registryPath: resolveInsideProject(".agents", "projects.json"),
-  usageProvider: () => supervisorStore.readProjectUsage()
+  localRegistryPath: resolveInsideProject(".agents", "projects.local.json"),
+  usageProvider: () => supervisorStore.readProjectUsage(),
+  metadataStore: projectRegistryStore,
+  workspaceRoot: "workspace"
 });
 await projectRegistry.init();
+const projectWorkspaceService = new ProjectWorkspaceService({ projectRoot, workspaceRoot: resolveInsideProject("workspace"), projectRegistry, registryStore: projectRegistryStore });
+await projectWorkspaceService.init();
 const supervisorDecisionLayer = new SupervisorDecisionLayer({ projectRegistry, workflowPlanner });
 const taskRunner = new HarnessRunner({
   projectRoot,
@@ -82,12 +92,24 @@ const taskRunner = new HarnessRunner({
   stdoutLimit: config.stdoutLimit ?? 12000,
   stderrLimit: config.stderrLimit ?? 12000
 });
+const taskHeartbeatSeconds = limitNumber(config.taskHeartbeatSeconds, 15, 1, 300);
+const taskStalledAfterSeconds = limitNumber(config.taskStalledAfterSeconds, 60, 5, 3600);
+const maxConcurrentTasks = limitNumber(config.maxConcurrentTasks, 1, 1, 4);
 const taskRuntime = new TaskRuntime({
   store: taskStore,
   runner: taskRunner,
-  heartbeatSeconds: limitNumber(config.taskHeartbeatSeconds, 15, 1, 300),
-  stalledAfterSeconds: limitNumber(config.taskStalledAfterSeconds, 60, 5, 3600),
-  maxConcurrentTasks: limitNumber(config.maxConcurrentTasks, 1, 1, 4)
+  heartbeatSeconds: taskHeartbeatSeconds,
+  stalledAfterSeconds: taskStalledAfterSeconds,
+  maxConcurrentTasks
+});
+const supervisorSettings = new SupervisorSettingsService({
+  resourceProfilesPath: resolveInsideProject(".agents", "resource-profiles.json"),
+  runtime: {
+    maxConcurrentTasks,
+    heartbeatSeconds: taskHeartbeatSeconds,
+    stalledAfterSeconds: taskStalledAfterSeconds,
+    retention: config.retention || null
+  }
 });
 const workflowRuntime = new WorkflowRuntime({
   store: workflowStore,
@@ -99,7 +121,7 @@ const workflowRuntime = new WorkflowRuntime({
 const reviewPackageService = new SupervisorReviewPackageService({ workflowRuntime, taskRuntime, projectRegistry, store: supervisorStore, attemptInspector: (attemptId) => taskRunner.inspectAttempt(attemptId) });
 const projectIntelligenceService = new ProjectIntelligenceService({ workflowRuntime, projectRegistry, store: supervisorStore });
 const projectContinuityService = new ProjectContinuityService({ workflowRuntime, projectRegistry, store: supervisorStore, releaseStatus });
-const supervisorService = new SupervisorService({ decisionLayer: supervisorDecisionLayer, store: supervisorStore, workflowRuntime, reviewPackageService, projectIntelligenceService, projectContinuityService });
+const supervisorService = new SupervisorService({ decisionLayer: supervisorDecisionLayer, store: supervisorStore, workflowRuntime, reviewPackageService, projectIntelligenceService, projectContinuityService, projectWorkspaceService });
 
 function scriptPath(scriptName) {
   const selected = scriptName === "claude-task.ps1" ? claudeTaskPath : scriptName === "summary.ps1" ? summaryPath : scriptName === "ledger.ps1" ? ledgerPath : null;
@@ -345,7 +367,7 @@ function getResult(runId = "latest") {
 function createServer() {
   const server = new McpServer({
     name: "codex-claude-worker-harness-bridge",
-    version: "1.8.0-beta.1"
+    version: "1.10.0-beta.1"
   });
 
   server.registerTool(
@@ -562,7 +584,7 @@ function createServer() {
     "cc_create_task",
     {
       title: "Create Durable Worker Task",
-      description: "Create a persistent asynchronous task and return immediately. Run-mode tasks wait for explicit approval.",
+      description: "Create a persistent asynchronous compatibility task and return immediately. Exact registered Project ids, names, paths, or aliases present in the prompt are deterministically bound through the Project Registry so plan Attempts receive trusted Project Context; ambiguous or unrecognized project text is never treated as a workspace path. Prefer cc_create_workflow for the Project-first Supervisor flow. Run-mode tasks wait for explicit approval.",
       inputSchema: {
         prompt: z.string().min(1),
         mode: z.enum(["plan", "review", "run"]).optional(),
@@ -576,6 +598,7 @@ function createServer() {
     async (input = {}) => {
       try {
         const profile = resolveMcpResourceProfile(input);
+        const projectContext = resolveTaskProjectContext(projectRegistry, input.prompt);
         const task = await taskRuntime.createTask({
           prompt: input.prompt,
           mode: input.mode || "plan",
@@ -585,7 +608,8 @@ function createServer() {
           maxTurns: profile.limits.maxTurns,
           maxFilesRead: profile.limits.maxFilesRead,
           maxCommands: profile.limits.maxCommands,
-          mockWorker: input.mockWorker === true
+          mockWorker: input.mockWorker === true,
+          projectContext
         });
         return jsonToolResult({ status: "success", taskId: task.taskId, task });
       } catch (error) {
@@ -993,7 +1017,7 @@ app.get("/health", async (req, res) => {
   });
 });
 
-registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, providerPreflight, taskRunner, workflowMetadataStore, dashboardRoot: supervisorDashboardRoot });
+registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, supervisorSettings, providerPreflight, taskRunner, workflowMetadataStore, dashboardRoot: supervisorDashboardRoot });
 
 app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
   res.json({

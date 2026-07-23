@@ -1,4 +1,4 @@
-# Supervisor v1.8 Beta
+# Supervisor v1.10 Beta
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -67,7 +67,7 @@ The Dashboard is the control console for state, evidence, and approval; it is no
 - Durable Workflow and Task state that survives browser or MCP client disconnection.
 - Data-driven selection among software change, analysis-only, and documentation workflows.
 - Explicit Approve / Reject controls before a write-capable Task exists.
-- Resource Profiles for budget, turns, file reads, commands, and timeout.
+- Resource Profiles for budget, turns, file reads, commands, and timeout, with Planner-scope selection for approval-gated software changes.
 - Focused post-change review with files, checks, risks, errors, cost, and usage.
 - Strict cross-validation between Worker JSON claims and observed Claude Code tool events.
 - A fixed MCP surface for ChatGPT Web through OpenAI Secure MCP Tunnel.
@@ -87,7 +87,7 @@ The Dashboard is the control console for state, evidence, and approval; it is no
 
 ChatGPT can attach a structured `supervisorDecision` to `cc_create_workflow`. The Decision records intent, technical goal, registered project, concise reasoning, risks, expected resources, recommended Workflow/actions, confidence, whether a Worker is needed, and the next action. v1.2 also records `technical_summary`, `implementation_strategy`, `expected_changes`, and `validation_plan` so GPT owns the technical direction instead of forwarding a one-line request. The local Console uses the same Decision Layer with deterministic, explainable fallback rules when no model is present. Every Decision is persisted under `runtime-data/supervisor-decisions/` before it can reach the Workflow Runtime.
 
-Projects are registered in `.agents/projects.json` with `projectId`, relative `workspacePath`, description, stack, aliases, constraints, and runtime-derived `lastUsed`. A project root may contain GPT-only `AI_SUPERVISOR.md` and `PROJECT_MEMORY.md`. GPT must pass the exact registered `projectId`; a GPT-authored Workflow request without it is rejected. If several projects remain plausible, Supervisor returns `project_confirmation_required`; no Workflow or Worker starts until the user confirms one candidate.
+Release Projects are registered in `.agents/projects.json`; machine-local Projects may be added through ignored `.agents/projects.local.json` using `.agents/projects.local.example.json` as the template. Both use `projectId`, relative `workspacePath`, description, stack, aliases, and constraints. The Runtime applies its persisted metadata overlay last. Duplicate release/local `projectId` values fail startup, and local paths must remain relative and inside `workspace/`. A project root may contain GPT-only `AI_SUPERVISOR.md` and `PROJECT_MEMORY.md`. GPT must pass the exact registered `projectId`; a GPT-authored Workflow request without it is rejected. If several projects remain plausible, Supervisor returns `project_confirmation_required`; no Workflow or Worker starts until the user confirms one candidate.
 
 Before `cc_create_workflow`, ChatGPT Supervisor calls `cc_list_projects`, `cc_get_project_context`, and `cc_list_workflow_definitions`. Project context returns the Registry workspace, instructions, Project Memory, and Sessions. ChatGPT may reuse a Session returned for that same Project. Unknown projects, cross-project Session reuse, missing GPT `projectId`, and unknown Workflow IDs are rejected locally. If the goal itself remains ambiguous, risky, or low-confidence, the Decision enters `waiting_for_clarification`; an explicit answer regenerates a new linked Decision before any Workflow can exist.
 
@@ -137,9 +137,9 @@ Enter a request such as:
 
 Supervisor starts with a persisted Decision and read-only planning. The compact Workflow header switches between the Workflow summary and stage timeline instead of displaying both. The timeline navigates one relevant page at a time: Decision/Plan, Approval, Implementation, or Review. Completed and current stages are viewable; future stages remain disabled. Overall status is collapsed by default, and the independently sticky Recent Work rail can be hidden or restored. Review the bounded plan, enter your name and decision reason, then explicitly Approve or Reject. Approval metadata is audit context, not identity verification.
 
-The Dashboard follows the browser language by default and can be switched between Chinese and English. Recent Work is grouped by date; display names and archive state are stored separately under ignored `runtime-data/supervisor-workflow-metadata/`, without rewriting Workflow snapshots or events. ChatGPT Supervisor remains the primary request entry. The Dashboard's **Local fallback entry** is retained as a collapsed, rule-based backup.
+The Dashboard follows the browser language by default, can be switched between Chinese and English, and supports system/light/dark themes. Its main console is Project-first: Projects expand vertically into their active and archived Workflows in one workspace tree, while the selected Project or Workflow opens in the detail area. Active Workflows are ordered by creation time; terminal Workflows can be archived and restored without rewriting snapshots, events, Review Packages, Artifacts, or Memory history. The top-bar **Settings** dialog manages the default Resource Profile, each profile envelope, and configurable safety locks for future Tasks; immutable code caps remain in force, and running Attempts keep their frozen limits. Approval, audit, side-effect protection, concurrency, and retention remain visible but read-only there. Settings requests have bounded timeouts, duplicate-submit guards, in-dialog errors, and stale-poll protection. ChatGPT Supervisor remains the primary request entry. The Dashboard's **Local fallback entry** is retained as a collapsed, rule-based backup and includes an active registered Project selector synchronized with the workspace tree.
 
-Before first use, review `.agents/projects.json`. Keep paths relative to `projectRoot`; register only directories the Supervisor should be allowed to target. When the Console asks for project confirmation, choosing a project still starts only the read-only Planner.
+The checked-in `.agents/projects.json` is the release registry. Optional `.agents/projects.local.json` is machine-local and ignored; copy the checked-in example before adding private workspace Projects. Dashboard-created Project records and metadata overrides are stored separately under ignored `runtime-data/supervisor-project-registry/projects.json`. The load order is release registry, local registry, then runtime overlay. Project creation accepts only a name and creates one managed direct child under `workspace/`. Rename keeps `projectId` stable and moves that managed directory. The Dashboard never scans or imports unregistered workspace directories, and it does not accept arbitrary absolute paths. New Workflows always require an explicit registered Project; the Dashboard does not maintain a separate unassigned-work history group.
 
 `doctor.ps1` performs no external model call by default. The explicit `-ProviderPreflight` switch sends only a fixed connectivity marker from an isolated empty temporary directory, with tools disabled and session persistence off. It never sends project content or creates a Workflow. The probe can incur the provider's minimum request cost.
 
@@ -159,9 +159,9 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 
 v1.0-beta is a release-convergence milestone, not a Runtime redesign. It keeps the v0.9 Decision, Workflow, Task, approval, resource, and audit boundaries intact while tightening first-run guidance, version checks, release artifact visibility, and repeatable Todo acceptance. See [v1.0-beta release audit](docs/v1.0-beta-release-audit.md).
 
-## v1.8 Beta release candidate
+## v1.10 Beta release candidate
 
-v1.8 consolidates the Decision, Project Context, Project Intelligence, Human-GPT Collaboration, and Project Continuity layers into a public-Beta candidate. It adds deterministic Project Health and explicit release-readiness metadata; it does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [Changelog](CHANGELOG.md) and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The candidate remains `pending_gpt_web_validation` until that manual fresh-session check is recorded.
+v1.10 freezes the Project-first Dashboard, layered Project Registry, Planner Resource Selection, Project Context Snapshot, Dashboard Settings, automatic test discovery, and clean onboarding validation as a public-Beta candidate. It does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [Changelog](CHANGELOG.md) and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The candidate remains `pending_gpt_web_validation` until that manual fresh-session check is recorded.
 
 ## Architecture
 
@@ -255,7 +255,8 @@ Public, versioned configuration:
 - `.agents/policy.json` — mode and tool policy;
 - `.agents/resource-profiles.json` — resource envelopes and global hard limits;
 - `.agents/workflow-definitions.json` — Workflow selection metadata and stages;
-- `.agents/projects.json` — registered relative project paths and selection aliases;
+- `.agents/projects.json` — release Project paths and selection aliases;
+- `.agents/projects.local.example.json` — placeholder-only local registry template;
 - `AI_SUPERVISOR.md` — optional GPT-only project instructions; its raw contents are never copied into a Worker prompt;
 - `PROJECT_MEMORY.md` — optional GPT-only project goals, decisions, completed work, known issues, and next steps;
 - `mcp-server/config.example.json` — placeholder-only Bridge template.
@@ -263,6 +264,7 @@ Public, versioned configuration:
 Machine-local, ignored configuration:
 
 - `mcp-server/config.json` — workspace path, loopback port, timeouts, and Origins;
+- `.agents/projects.local.json` — private local Projects under `workspace/`;
 - `.agents/local.config.json` — legacy local settings;
 - runtime data, Worker artifacts, Tunnel profiles, and logs.
 
@@ -298,20 +300,12 @@ Safe local checks that do not require a paid Worker call:
 # Isolated Bridge and full mock MCP Workflow
 .\scripts\test-mcp-protocol.ps1
 
-# Runtime and product UI tests
-node .\runtime\workflow-planner.test.mjs
-node .\runtime\workflow-runtime.test.mjs
-node .\runtime\supervisor-brain.test.mjs
-node .\runtime\project-continuity.test.mjs
-node .\runtime\runtime-retention.test.mjs
-node .\runtime\harness-runner.test.mjs
-node .\runtime\provider-preflight.test.mjs
-node .\runtime\failure-catalog.test.mjs
-node .\workspace\autonomous-beta-demo\demo.test.mjs
-node .\workspace\release-beta-todo-demo\demo.test.mjs
-node .\mcp-server\supervisor-dashboard-routes.test.mjs
-node .\mcp-server\supervisor-product-view.test.mjs
-node .\workspace\supervisor-dashboard\dashboard-ui.test.mjs
+# All Git-visible runtime/MCP/scripts/workspace *.test.mjs files
+.\scripts\run-node-tests.ps1
+
+# Release registry, ignored local registry, and runtime-data hygiene
+.\scripts\verify-release-projects.ps1
+
 .\scripts\doctor-nvm.test.ps1
 ```
 
