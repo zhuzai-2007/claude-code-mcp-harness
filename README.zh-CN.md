@@ -20,7 +20,9 @@ Supervisor 是一个**为编码 Agent 提供审批、审计、项目连续性和
 
 ## 五分钟快速开始
 
-要求：Windows PowerShell、Node.js 20 或更高版本、已配置 Provider 的 Claude Code CLI，以及支持 MCP 连接的 ChatGPT Web。
+要求：Windows PowerShell、Node.js 20 或更高版本、已配置 Provider 的 Claude Code CLI，以及能够使用所需 custom MCP action 的 ChatGPT 账户或工作区。在本发布候选版本编写时，OpenAI 官方文档将完整 MCP 写操作列为受支持 Business 与 Enterprise/Edu 工作区的能力；请在安装前通过下方指南确认最新套餐和管理员权限要求。
+
+如果目前只有 Git 和 Claude Code，请从 [Windows 从零开始指南](docs/getting-started-from-zero.md) 开始。ChatGPT 套餐、工作区、custom MCP 和写操作的可用性由 OpenAI 独立提供并可能变化。
 
 1. **安装依赖。** 克隆仓库，在仓库根目录打开 PowerShell：
 
@@ -159,7 +161,7 @@ v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Dec
 
 ## v1.10 Beta 发布候选
 
-v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [Changelog](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.md#end-to-end-release-validation)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
+v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [发布候选审计](docs/release/v1.10.0-beta.1.md)、[Changelog](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.md#end-to-end-release-validation)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
 
 ## 架构
 

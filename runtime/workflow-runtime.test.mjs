@@ -368,5 +368,5 @@ try {
 
   console.log(JSON.stringify({ ok: true, workflowId: created.workflowId, plannerTaskId, coderTaskId: coderStage.taskId, reviewerTaskId: reviewerStage.taskId, finalStatus: completed.status, failedStage: failedWorkflow.failure.failedStage }, null, 2));
 } finally {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

@@ -6,12 +6,49 @@ $ErrorActionPreference = "Stop"
 
 $script = Join-Path (Split-Path -Parent $PSScriptRoot) 'claude-task.ps1'
 $ledgerScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'ledger.ps1'
+$agentsRoot = Split-Path -Parent $PSScriptRoot
+$projectRoot = Split-Path -Parent $agentsRoot
 $results = New-Object System.Collections.Generic.List[object]
 $runIdCounter = 0
 function Add-Result { param([string]$Name, [bool]$Passed, [string]$Detail) $script:results.Add([ordered]@{ name = $Name; passed = $Passed; detail = $Detail }) }
 function New-TestRunId {
     $script:runIdCounter++
     return (Get-Date).AddMilliseconds($script:runIdCounter).ToString('yyyyMMdd-HHmmss-fff')
+}
+function Resolve-TestRunArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string] $RunId,
+        [Parameter(Mandatory = $true)][string] $ArtifactName
+    )
+    $preferredPath = Join-Path (Join-Path (Join-Path $agentsRoot 'runs') $RunId) $ArtifactName
+    if (Test-Path -LiteralPath $preferredPath -PathType Leaf) { return $preferredPath }
+
+    $legacyPath = Join-Path (Join-Path (Join-Path $projectRoot '.agent-runs') $RunId) $ArtifactName
+    if (Test-Path -LiteralPath $legacyPath -PathType Leaf) { return $legacyPath }
+
+    return $null
+}
+
+$layoutProbeRunId = New-TestRunId
+$layoutProbeName = 'layout-probe.txt'
+$preferredProbeDir = Join-Path (Join-Path $agentsRoot 'runs') $layoutProbeRunId
+$legacyProbeDir = Join-Path (Join-Path $projectRoot '.agent-runs') $layoutProbeRunId
+$preferredProbePath = Join-Path $preferredProbeDir $layoutProbeName
+$legacyProbePath = Join-Path $legacyProbeDir $layoutProbeName
+try {
+    [System.IO.Directory]::CreateDirectory($preferredProbeDir) | Out-Null
+    [System.IO.Directory]::CreateDirectory($legacyProbeDir) | Out-Null
+    [System.IO.File]::WriteAllText($preferredProbePath, 'preferred', (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText($legacyProbePath, 'legacy', (New-Object System.Text.UTF8Encoding($false)))
+    $preferredResolved = Resolve-TestRunArtifact -RunId $layoutProbeRunId -ArtifactName $layoutProbeName
+    Remove-Item -LiteralPath $preferredProbePath -Force
+    $legacyResolved = Resolve-TestRunArtifact -RunId $layoutProbeRunId -ArtifactName $layoutProbeName
+    Add-Result 'run-artifact-layout-preferred-with-legacy-fallback' (($preferredResolved -eq $preferredProbePath) -and ($legacyResolved -eq $legacyProbePath)) "preferred=$($preferredResolved -eq $preferredProbePath) fallback=$($legacyResolved -eq $legacyProbePath)"
+} finally {
+    Remove-Item -LiteralPath $preferredProbePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $legacyProbePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $preferredProbeDir -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $legacyProbeDir -Force -ErrorAction SilentlyContinue
 }
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task 'smoke dry run' -DryRun *> $null
@@ -148,8 +185,10 @@ foreach ($contractMode in @('plan', 'review', 'run')) {
 
 $schemaRunId = New-TestRunId
 & powershell -NoProfile -ExecutionPolicy Bypass -File $script run -Task 'verify CLI structured output enforcement' -ApprovedBy 'smoke-test' -ApprovalReason 'Inspect the generated run schema.' -DryRun -RunId $schemaRunId *> $null
-$schemaCommandPath = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.agent-runs') "$schemaRunId\command.txt"
-$schemaCommand = if (Test-Path -LiteralPath $schemaCommandPath) { Get-Content -LiteralPath $schemaCommandPath -Raw } else { '' }
+$schemaDryRunExit = $LASTEXITCODE
+$schemaCommandPath = if ($schemaDryRunExit -eq 0) { Resolve-TestRunArtifact -RunId $schemaRunId -ArtifactName 'command.txt' } else { $null }
+$schemaCommand = if ($schemaCommandPath) { Get-Content -LiteralPath $schemaCommandPath -Raw } else { '' }
+Add-Result 'schema-artifact-layout-resolved' (($schemaDryRunExit -eq 0) -and -not [string]::IsNullOrWhiteSpace($schemaCommandPath)) "exit=$schemaDryRunExit pathResolved=$(-not [string]::IsNullOrWhiteSpace($schemaCommandPath))"
 Add-Result 'cli-json-schema-enforced' (($schemaCommand -match '--json-schema') -and ($schemaCommand -match 'proposed_changes')) "schemaFlag=$($schemaCommand -match '--json-schema')"
 Add-Result 'run-json-schema-rejects-empty-terminal-audit' (($schemaCommand -match 'allOf') -and ($schemaCommand -match 'minItems') -and ($schemaCommand -match 'maxItems') -and ($schemaCommand -match 'placeholder') -and ($schemaCommand -match 'reason')) "conditional=$($schemaCommand -match 'allOf') placeholderGuard=$($schemaCommand -match 'placeholder')"
 Add-Result 'system-prompt-uses-file-on-windows' (($schemaCommand -match '--system-prompt-file') -and ($schemaCommand -notmatch '--system-prompt\s+"You are Claude Code')) "fileFlag=$($schemaCommand -match '--system-prompt-file')"

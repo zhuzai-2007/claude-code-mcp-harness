@@ -20,7 +20,9 @@ The project does not build a new model or a general Agent platform. It reuses AI
 
 ## Five-minute quick start
 
-Requirements: Windows PowerShell, Node.js 20+, Claude Code CLI with a configured provider, and access to ChatGPT Web with an MCP-capable connection.
+Requirements: Windows PowerShell, Node.js 20+, Claude Code CLI with a configured provider, and a ChatGPT account or workspace where the required custom-MCP actions are available. At the time of this release candidate, OpenAI documents full MCP write actions for supported Business and Enterprise/Edu workspaces; verify the current plan and admin requirements in the linked setup guide.
+
+Starting with only Git and Claude Code? Follow [Getting started from zero on Windows](docs/getting-started-from-zero.md). ChatGPT plan and workspace support for custom MCP and write actions changes independently of this project, so verify current availability before installing.
 
 1. **Install dependencies.** Clone the repository, open PowerShell in its root, and run:
 
@@ -161,7 +163,7 @@ v1.0-beta is a release-convergence milestone, not a Runtime redesign. It keeps t
 
 ## v1.10 Beta release candidate
 
-v1.10 freezes the Project-first Dashboard, layered Project Registry, Planner Resource Selection, Project Context Snapshot, Dashboard Settings, automatic test discovery, and clean onboarding validation as a public-Beta candidate. It does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [Changelog](CHANGELOG.md) and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The candidate remains `pending_gpt_web_validation` until that manual fresh-session check is recorded.
+v1.10 freezes the Project-first Dashboard, layered Project Registry, Planner Resource Selection, Project Context Snapshot, Dashboard Settings, automatic test discovery, and clean onboarding validation as a public-Beta candidate. It does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [release candidate audit](docs/release/v1.10.0-beta.1.md), [Changelog](CHANGELOG.md), and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The candidate remains `pending_gpt_web_validation` until that manual fresh-session check is recorded.
 
 ## Architecture
 
