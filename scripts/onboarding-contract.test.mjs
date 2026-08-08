@@ -39,8 +39,14 @@ for (const [name, source] of [["README", readme], ["README.zh-CN", readmeZh]]) {
   assert(source.includes('-Initialize -TunnelId "<tunnel-id>"'), `${name} must include the required tunnel id placeholder`);
 }
 
-for (const marker of ["Add CSV export to the demo task board", "Human Approval", "Harness Audit", "ChatGPT Supervisor Review"]) {
-  assert(readme.includes(marker), `README must include demo marker: ${marker}`);
+for (const marker of ["registered Project", "projectId", "Human Approval", "Harness Audit", "ChatGPT Supervisor Review"]) {
+  assert(readme.includes(marker), `README must include stable Project-first onboarding contract: ${marker}`);
+}
+for (const marker of ["Release Beta Todo Demo", "add CSV export to the task board"]) {
+  assert(readme.includes(marker), `README must include canonical demo marker: ${marker}`);
+}
+for (const marker of ["已注册的 Project", "projectId", "Human Approval", "Harness Audit", "ChatGPT Supervisor Review", "Release Beta Todo Demo"]) {
+  assert(readmeZh.includes(marker), `README.zh-CN must include Project-first onboarding contract: ${marker}`);
 }
 for (const marker of ["ChatGPT Web", "Claude Code Worker", "Supervisor Dashboard", "cc_get_supervisor_review_package", "new ChatGPT Web conversation"]) {
   assert(usage.includes(marker), `GPT Web usage guide must include: ${marker}`);
