@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 3,
+  "projects": [
+    {
+      "projectId": "supervisor-runtime",
+      "name": "Supervisor Runtime",
+      "workspacePath": ".",
+      "description": "The MCP Bridge, Supervisor Brain, Workflow Runtime, Harness, and product documentation.",
+      "language": "JavaScript, PowerShell",
+      "stack": ["Node.js ESM", "Express", "MCP SDK", "PowerShell", "Static HTML/CSS/JavaScript"],
+      "lastUsed": null,
+      "aliases": ["supervisor runtime", "mcp bridge", "harness project", "本项目", "当前项目"],
+      "constraints": [
+        "Preserve the Harness, approval, audit, Task Runtime, and Workflow Runtime boundaries.",
+        "Do not introduce a database, front-end framework, or additional Agent runtime.",
+        "Keep changes localized and maintain Windows PowerShell operation."
+      ]
+    },
+    {
+      "projectId": "supervisor-dashboard",
+      "name": "Supervisor Dashboard",
+      "workspacePath": "workspace/supervisor-dashboard",
+      "description": "The local approval, workflow status, event, artifact, and diff console.",
+      "language": "HTML, CSS, JavaScript",
+      "stack": ["Static HTML", "CSS", "Browser JavaScript", "Local REST API"],
+      "lastUsed": null,
+      "aliases": ["supervisor dashboard", "supervisor console", "审批中心", "控制台"],
+      "constraints": [
+        "Do not introduce React, Vue, or another front-end framework.",
+        "Keep the Dashboard observational and route state changes through the existing local product API.",
+        "Do not bypass Workflow approval or call the Harness directly."
+      ]
+    },
+    {
+      "projectId": "autonomous-beta-demo",
+      "name": "Autonomous Beta Demo",
+      "workspacePath": "workspace/autonomous-beta-demo",
+      "description": "An isolated dependency-free release checklist used only for Supervisor autonomous beta validation.",
+      "language": "HTML, CSS, JavaScript",
+      "stack": ["Static HTML", "CSS", "Browser JavaScript"],
+      "lastUsed": null,
+      "aliases": ["Autonomous Beta Demo", "autonomous beta demo", "自主验收 Demo", "自主验收演示"],
+      "constraints": [
+        "Keep the demo dependency-free and browser-only.",
+        "Limit all inspection and changes to workspace/autonomous-beta-demo.",
+        "Preserve the existing status filter, completion counts, and seeded checklist data."
+      ]
+    },
+    {
+      "projectId": "release-beta-todo-demo",
+      "name": "Release Beta Todo Demo",
+      "workspacePath": "workspace/release-beta-todo-demo",
+      "description": "An isolated dependency-free Todo application used only for Supervisor v1.0-beta release acceptance.",
+      "language": "HTML, CSS, JavaScript",
+      "stack": ["Static HTML", "CSS", "Browser JavaScript"],
+      "lastUsed": null,
+      "aliases": ["Demo Todo 应用", "Demo Todo", "Todo Demo", "发布 Todo 演示"],
+      "constraints": [
+        "Keep the demo dependency-free and browser-only.",
+        "Limit all inspection and changes to workspace/release-beta-todo-demo.",
+        "Preserve the existing status filter, visible and completion counts, seeded Todo data, and responsive layout."
+      ]
+    }
+  ]
+}

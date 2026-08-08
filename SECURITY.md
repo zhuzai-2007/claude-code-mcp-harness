@@ -1,53 +1,34 @@
 # Security Policy
 
-[English](#english) | [简体中文](#简体中文)
+## Supported versions
 
-## English
+The current Beta branch receives best-effort security fixes. This project is a supervised local development runtime, not a production security boundary or operating-system sandbox.
 
-### Supported versions
+## Reporting a vulnerability
 
-Only the latest Alpha release and the current `main` branch receive best-effort security fixes. This project is not production-ready and provides no production security guarantee.
+Use GitHub Security Advisories to report suspected vulnerabilities privately. If private reporting is unavailable, open a minimal public issue requesting a private channel without including exploit details or sensitive data.
 
-### Reporting a vulnerability
+Include the affected version, operating system, PowerShell/Node/Claude CLI versions, the smallest sanitized reproduction, expected and observed boundary, error code, and whether the issue reproduces with `mockWorker`.
 
-Use the repository's GitHub **Security Advisories** feature to report suspected vulnerabilities privately. If that feature is unavailable, open a minimal public issue asking the maintainers to establish a private channel, without including exploit details or sensitive data. This project does not currently publish a dedicated security email address.
+Never disclose API keys, Tunnel IDs, runtime tokens, private URLs, prompts, event streams, ledgers, local paths, or user data in a public issue.
 
-Include:
+## Security boundary
 
-- affected version or commit;
-- operating system, PowerShell, Node.js, and Claude Code versions;
-- the smallest safe reproduction;
-- expected and observed security boundary;
-- sanitized error codes and audit metadata;
-- whether the issue reproduces with `mockWorker`.
+Supervisor uses defense in depth:
 
-Do not disclose API keys, Tunnel IDs, runtime keys, private URLs, credentials, prompts, complete event streams, ledgers, personal paths, or user data in a public issue.
+- explicit human approval before write-capable Workflow stages;
+- project-root confinement and side-effect checks;
+- mode-specific tool allow/deny rules;
+- Resource Profile and global hard limits;
+- Worker event auditing and strict result contracts;
+- local-only Bridge defaults and Origin filtering.
 
-### Scope and expectations
+These controls do not provide process isolation. Shell commands and child processes can retain operating-system permissions unless the user additionally runs the project in a restricted account, container, or virtual machine. Approval fields are workflow metadata, not identity verification or cryptographic proof of consent. Worker event auditing verifies reported tool evidence, not every possible operating-system action.
 
-The Bridge, Harness policy, approvals, tool allow/deny rules, side-effect guard, and Claude event auditing are defense-in-depth guardrails. They are not an OS sandbox, kernel audit trail, or safe environment for arbitrary untrusted code. Provider or CLI event omissions are handled conservatively, but event-level auditing cannot prove all operating-system activity.
+## 配置与密钥安全
 
-## 简体中文
+本项目默认在本机运行，并在可写阶段前要求明确的人工审批。Resource Profile、工具权限、side-effect guard 和审计契约属于纵深防护，但不能替代操作系统沙箱。
 
-### 支持版本
+请通过 GitHub Security Advisories 私下报告安全问题。公开报告中不要包含 API key、Tunnel ID、代理凭据、私有 URL、prompt、完整事件流、ledger、本地绝对路径或用户数据。
 
-仅最新 Alpha 版本和当前 `main` 分支会尽力获得安全修复。本项目不适合生产环境，也不提供生产级安全保证。
-
-### 私下报告安全问题
-
-请优先使用仓库的 GitHub **Security Advisories** 私下报告疑似漏洞。如果该功能不可用，可以只创建一个不包含漏洞细节或敏感数据的最小公开 issue，请维护者建立私下沟通渠道。项目当前没有公开专用安全邮箱。
-
-报告建议包含：
-
-- 受影响版本或提交；
-- 操作系统、PowerShell、Node.js 和 Claude Code 版本；
-- 最小且安全的复现；
-- 预期和实际安全边界；
-- 已脱敏的错误码与审计元数据；
-- 是否能在 `mockWorker` 下复现。
-
-不要在公开 issue 中披露 API key、Tunnel ID、runtime key、私有 URL、凭据、prompt、完整事件流、ledger、个人路径或用户数据。
-
-### 安全边界
-
-Bridge、Harness policy、审批、工具允许/拒绝规则、side-effect guard 和 Claude 事件审计属于纵深 guardrail。它们不是操作系统级沙箱、内核审计轨迹，也不能安全执行任意不可信代码。系统会保守处理 CLI 或 Provider 缺失事件，但事件级审计不能证明全部操作系统行为。
+模型 Provider key、`CONTROL_PLANE_API_KEY`、代理地址和 Tunnel 配置只能作为运行环境配置保存，不应写入仓库。具体边界见 `docs/configuration.md`。

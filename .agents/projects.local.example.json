@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "projectId": "my-local-project",
+      "name": "My Local Project",
+      "workspacePath": "workspace/my-local-project",
+      "description": "A local project that is intentionally not part of the release registry.",
+      "language": "JavaScript",
+      "stack": ["Node.js"],
+      "aliases": ["my local project"],
+      "constraints": [
+        "Keep all inspection and changes inside this registered project workspace."
+      ]
+    }
+  ]
+}

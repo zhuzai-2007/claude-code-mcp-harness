@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "projectId": "supervisor-runtime",
+  "version": "1.10.0-beta.1",
+  "channel": "beta",
+  "baseline": "release_candidate",
+  "readiness": "pending_gpt_web_validation",
+  "lastGptWebDogfood": null,
+  "attention": [
+    "The v1.10 release candidate still requires the documented GPT Web end-to-end validation.",
+    "No v1.10 GPT Web dogfood result has been recorded."
+  ],
+  "nextRequiredChecks": [
+    "Run the documented GPT Web end-to-end validation from a new ChatGPT session.",
+    "Record the Supervisor Review outcome before declaring the public Beta ready."
+  ]
+}

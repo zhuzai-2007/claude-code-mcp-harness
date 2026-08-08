@@ -6,6 +6,30 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
+import { FileTaskStore } from "../runtime/file-task-store.mjs";
+import { FileWorkflowStore } from "../runtime/file-workflow-store.mjs";
+import { FileSupervisorStore } from "../runtime/file-supervisor-store.mjs";
+import { HarnessRunner } from "../runtime/harness-runner.mjs";
+import { ProjectContextRegistry } from "../runtime/project-context.mjs";
+import { ProjectRegistryStore } from "../runtime/project-registry-store.mjs";
+import { ProjectWorkspaceService } from "../runtime/project-workspace-service.mjs";
+import { ProjectIntelligenceService } from "../runtime/project-intelligence.mjs";
+import { ProjectContinuityService } from "../runtime/project-continuity.mjs";
+import { ProviderPreflightService } from "../runtime/provider-preflight.mjs";
+import { SupervisorDecisionLayer } from "../runtime/supervisor-decision.mjs";
+import { SupervisorService } from "../runtime/supervisor-service.mjs";
+import { SupervisorReviewPackageService } from "../runtime/supervisor-review-package.mjs";
+import { SupervisorSettingsService } from "../runtime/supervisor-settings.mjs";
+import { applyRuntimeRetention, planRuntimeRetention } from "../runtime/runtime-retention.mjs";
+import { TaskRuntime } from "../runtime/task-runtime.mjs";
+import { WorkflowRuntime } from "../runtime/workflow-runtime.mjs";
+import { loadWorkflowDefinitions } from "../runtime/workflow-definitions.mjs";
+import { WorkflowPlanner } from "../runtime/workflow-planner.mjs";
+import { resolveMcpResourceProfile, resourceProfileHarnessArgs } from "./resource-profile-input.mjs";
+import { registerSupervisorDashboardRoutes } from "./supervisor-dashboard-routes.mjs";
+import { resolveTaskProjectContext } from "./task-project-binding.mjs";
+import { WorkflowMetadataStore } from "./workflow-metadata-store.mjs";
+import { listWorkflowDefinitionCapabilities, unknownWorkflowDefinitionResult } from "./workflow-definition-capabilities.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +40,10 @@ function readJson(filePath) {
 }
 
 const config = readJson(configPath);
+const workflowDefinitions = await loadWorkflowDefinitions();
+const workflowPlanner = new WorkflowPlanner({ definitions: workflowDefinitions });
+const releaseStatusPath = path.join(__dirname, "..", ".agents", "release-status.json");
+const releaseStatus = fs.existsSync(releaseStatusPath) ? readJson(releaseStatusPath) : null;
 
 function normalizeSlashes(value) {
   return value.replaceAll("\\", "/");
@@ -37,6 +65,63 @@ const claudeTaskPath = resolveInsideProject(".agents", "claude-task.ps1");
 const summaryPath = resolveInsideProject(".agents", "summary.ps1");
 const ledgerPath = resolveInsideProject(".agents", "ledger.ps1");
 const allowedScriptPaths = new Set([claudeTaskPath, summaryPath, ledgerPath].map((p) => path.resolve(p).toLowerCase()));
+const runtimeDataRoot = resolveInsideProject(process.env.SUPERVISOR_RUNTIME_DATA_ROOT || config.runtimeDataRoot || "runtime-data");
+const supervisorDashboardRoot = resolveInsideProject("workspace", "supervisor-dashboard");
+const taskStore = new FileTaskStore(runtimeDataRoot);
+const workflowStore = new FileWorkflowStore(runtimeDataRoot);
+const supervisorStore = new FileSupervisorStore(runtimeDataRoot);
+const workflowMetadataStore = new WorkflowMetadataStore(runtimeDataRoot);
+const projectRegistryStore = new ProjectRegistryStore(runtimeDataRoot);
+const providerPreflight = new ProviderPreflightService({ runtimeDataRoot });
+await Promise.all([workflowMetadataStore.init(), projectRegistryStore.init()]);
+const projectRegistry = new ProjectContextRegistry({
+  projectRoot,
+  registryPath: resolveInsideProject(".agents", "projects.json"),
+  localRegistryPath: resolveInsideProject(".agents", "projects.local.json"),
+  usageProvider: () => supervisorStore.readProjectUsage(),
+  metadataStore: projectRegistryStore,
+  workspaceRoot: "workspace"
+});
+await projectRegistry.init();
+const projectWorkspaceService = new ProjectWorkspaceService({ projectRoot, workspaceRoot: resolveInsideProject("workspace"), projectRegistry, registryStore: projectRegistryStore });
+await projectWorkspaceService.init();
+const supervisorDecisionLayer = new SupervisorDecisionLayer({ projectRegistry, workflowPlanner });
+const taskRunner = new HarnessRunner({
+  projectRoot,
+  workerTimeoutSeconds: config.workerTimeoutSeconds ?? 300,
+  stdoutLimit: config.stdoutLimit ?? 12000,
+  stderrLimit: config.stderrLimit ?? 12000
+});
+const taskHeartbeatSeconds = limitNumber(config.taskHeartbeatSeconds, 15, 1, 300);
+const taskStalledAfterSeconds = limitNumber(config.taskStalledAfterSeconds, 60, 5, 3600);
+const maxConcurrentTasks = limitNumber(config.maxConcurrentTasks, 1, 1, 4);
+const taskRuntime = new TaskRuntime({
+  store: taskStore,
+  runner: taskRunner,
+  heartbeatSeconds: taskHeartbeatSeconds,
+  stalledAfterSeconds: taskStalledAfterSeconds,
+  maxConcurrentTasks
+});
+const supervisorSettings = new SupervisorSettingsService({
+  resourceProfilesPath: resolveInsideProject(".agents", "resource-profiles.json"),
+  runtime: {
+    maxConcurrentTasks,
+    heartbeatSeconds: taskHeartbeatSeconds,
+    stalledAfterSeconds: taskStalledAfterSeconds,
+    retention: config.retention || null
+  }
+});
+const workflowRuntime = new WorkflowRuntime({
+  store: workflowStore,
+  taskRuntime,
+  definitions: workflowDefinitions,
+  workflowPlanner,
+  resultProvider: (attemptId) => taskRunner.inspectAttempt(attemptId).audit
+});
+const reviewPackageService = new SupervisorReviewPackageService({ workflowRuntime, taskRuntime, projectRegistry, store: supervisorStore, attemptInspector: (attemptId) => taskRunner.inspectAttempt(attemptId) });
+const projectIntelligenceService = new ProjectIntelligenceService({ workflowRuntime, projectRegistry, store: supervisorStore });
+const projectContinuityService = new ProjectContinuityService({ workflowRuntime, projectRegistry, store: supervisorStore, releaseStatus });
+const supervisorService = new SupervisorService({ decisionLayer: supervisorDecisionLayer, store: supervisorStore, workflowRuntime, reviewPackageService, projectIntelligenceService, projectContinuityService, projectWorkspaceService });
 
 function scriptPath(scriptName) {
   const selected = scriptName === "claude-task.ps1" ? claudeTaskPath : scriptName === "summary.ps1" ? summaryPath : scriptName === "ledger.ps1" ? ledgerPath : null;
@@ -50,12 +135,6 @@ function limitNumber(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
-}
-
-function limitBudget(value, fallback = 0.10) {
-  const parsed = Number(value ?? fallback);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.round(Math.max(0.01, Math.min(5.00, parsed)) * 100) / 100;
 }
 
 function truncate(text, limit) {
@@ -288,7 +367,7 @@ function getResult(runId = "latest") {
 function createServer() {
   const server = new McpServer({
     name: "codex-claude-worker-harness-bridge",
-    version: "0.1.1-alpha"
+    version: "1.10.0-beta.1"
   });
 
   server.registerTool(
@@ -301,10 +380,59 @@ function createServer() {
     async () => jsonToolResult(getPingPayload())
   );
 
+  server.registerTool(
+    "cc_list_projects",
+    {
+      title: "List Registered Supervisor Projects",
+      description: "Supervisor discovery step 1 of 3 before cc_create_workflow: list Runtime-managed projects and select one exact projectId. GPT must never infer or invent a local workspace path. If no unique project is confirmed, stop and ask the user to choose.",
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async () => jsonToolResult({ status: "success", projects: await supervisorService.listProjects() })
+  );
+
+  server.registerTool(
+    "cc_get_project_context",
+    {
+      title: "Get Registered Supervisor Project Context",
+      description: "Supervisor discovery step 2 of 3 before cc_create_workflow: read the selected Runtime project, bound workspacePath, AI_SUPERVISOR.md, PROJECT_MEMORY.md summary, and existing Project Sessions. Use them to form a concrete technical direction. This read-only tool does not create a Decision, Workflow, Task, or Worker prompt.",
+      inputSchema: { project: z.string().min(1) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (input) => {
+      try { return jsonToolResult({ status: "success", context: await supervisorService.getProjectContext(input.project) }); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+    }
+  );
+
+  server.registerTool(
+    "cc_get_project_continuity",
+    {
+      title: "Get Compact Project Continuity Context",
+      description: "Read a compact, evidence-derived Project Brief, Project Memory summary, Supervisor Sessions, recent Workflows, and open issues before continuing work. This omits raw event history, never starts a Worker, and never changes Workflow or Task state.",
+      inputSchema: { projectId: z.string().min(1) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ projectId }) => {
+      try { return jsonToolResult({ status: "success", context: await supervisorService.getProjectContinuity(projectId) }); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+    }
+  );
+
+  server.registerTool(
+    "cc_list_workflow_definitions",
+    {
+      title: "List Supervisor Workflow Definitions",
+      description: "Supervisor discovery step 3 of 3 before cc_create_workflow: list every legal Workflow definition, its stages, approval requirement, resource profiles, and usage hints. Select only an id returned by this tool; do not invent Workflow names.",
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async () => jsonToolResult({ status: "success", ...listWorkflowDefinitionCapabilities(workflowDefinitions) })
+  );
+
   const taskInputSchema = {
     prompt: z.string().min(1),
     workerTimeoutSeconds: z.number().int().positive().max(3600).optional(),
     maxBudgetUsd: z.number().positive().max(5).optional(),
+    resourceProfile: z.string().min(1).optional(),
     mockWorker: z.boolean().optional()
   };
 
@@ -317,12 +445,14 @@ function createServer() {
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async (input = {}) => {
-      const { prompt, workerTimeoutSeconds } = input;
+      const { prompt } = input;
       const mockWorker = input?.mockWorker === true;
-      const timeout = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600);
-      const budget = limitBudget(input?.maxBudgetUsd, config.maxBudgetUsd ?? 0.10);
+      let profile;
+      try { profile = resolveMcpResourceProfile(input); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+      const timeout = profile.limits.timeoutSeconds;
       const runId = generateRunId();
-      const args = ["plan", "-Task", prompt, "-WorkerTimeoutSeconds", timeout, "-MaxBudgetUsd", budget, "-RunId", runId];
+      const args = ["plan", "-Task", prompt, ...resourceProfileHarnessArgs(profile), "-RunId", runId];
       if (mockWorker) args.push("-MockWorker");
       return jsonToolResult(await runHarness("claude-task.ps1", args, timeout, runId));
     }
@@ -332,17 +462,20 @@ function createServer() {
     "cc_review_task",
     {
       title: "Review Worker Task",
-      description: "Run the harness in read-only review mode for a fixed task prompt.",
+      description: "Run a focused read-only verification of the current change. Put the original request, plan result, run result, changes_made, and modified-file list in prompt so the Worker can validate the change without exploring the repository.",
       inputSchema: taskInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async (input = {}) => {
-      const { prompt, workerTimeoutSeconds } = input;
+      const { prompt } = input;
       const mockWorker = input?.mockWorker === true;
-      const timeout = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600);
-      const budget = limitBudget(input?.maxBudgetUsd, config.maxBudgetUsd ?? 0.10);
+      let profile;
+      const reviewInput = input.resourceProfile ? input : { ...input, resourceProfile: "review_readonly" };
+      try { profile = resolveMcpResourceProfile(reviewInput); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+      const timeout = profile.limits.timeoutSeconds;
       const runId = generateRunId();
-      const args = ["review", "-Task", prompt, "-WorkerTimeoutSeconds", timeout, "-MaxBudgetUsd", budget, "-RunId", runId];
+      const args = ["review", "-Task", prompt, ...resourceProfileHarnessArgs(profile), "-RunId", runId];
       if (mockWorker) args.push("-MockWorker");
       return jsonToolResult(await runHarness("claude-task.ps1", args, timeout, runId));
     }
@@ -352,19 +485,20 @@ function createServer() {
     "cc_run_approved_task",
     {
       title: "Run Approved Worker Task",
-      description: "Run the write-capable harness mode with explicit approval fields.",
+      description: "Legacy standalone compatibility tool: run one write-capable Harness task with explicit task-level approval fields. It does not approve or advance a Supervisor Workflow. For a Workflow waiting at its human checkpoint, use cc_approve_workflow so approval remains bound to the planned implementation stage.",
       inputSchema: {
         prompt: z.string().min(1),
         approvedBy: z.string().min(1).optional(),
         approvalReason: z.string().min(1).optional(),
         workerTimeoutSeconds: z.number().int().positive().max(3600).optional(),
         maxBudgetUsd: z.number().positive().max(5).optional(),
+        resourceProfile: z.string().min(1).optional(),
         mockWorker: z.boolean().optional()
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     async (input = {}) => {
-      const { prompt, approvedBy, approvalReason, workerTimeoutSeconds } = input;
+      const { prompt, approvedBy, approvalReason } = input;
       const mockWorker = input?.mockWorker === true;
       const finalApprovedBy = approvedBy || config.defaultApprovedBy;
       const finalApprovalReason = approvalReason || config.defaultApprovalReason;
@@ -374,8 +508,10 @@ function createServer() {
           error: "approvedBy and approvalReason are required when config defaults are not set."
         });
       }
-      const timeout = limitNumber(workerTimeoutSeconds, config.workerTimeoutSeconds ?? 300, 1, 3600);
-      const budget = limitBudget(input?.maxBudgetUsd, config.maxBudgetUsd ?? 0.10);
+      let profile;
+      try { profile = resolveMcpResourceProfile(input); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+      const timeout = profile.limits.timeoutSeconds;
       const runId = generateRunId();
       const args = [
         "run",
@@ -385,10 +521,7 @@ function createServer() {
         finalApprovedBy,
         "-ApprovalReason",
         finalApprovalReason,
-        "-WorkerTimeoutSeconds",
-        timeout,
-        "-MaxBudgetUsd",
-        budget,
+        ...resourceProfileHarnessArgs(profile),
         "-RunId",
         runId
       ];
@@ -445,6 +578,369 @@ function createServer() {
     }
   );
 
+  const taskIdSchema = z.string().regex(/^task_[a-zA-Z0-9_-]+$/);
+
+  server.registerTool(
+    "cc_create_task",
+    {
+      title: "Create Durable Worker Task",
+      description: "Create a persistent asynchronous compatibility task and return immediately. Exact registered Project ids, names, paths, or aliases present in the prompt are deterministically bound through the Project Registry so plan Attempts receive trusted Project Context; ambiguous or unrecognized project text is never treated as a workspace path. Prefer cc_create_workflow for the Project-first Supervisor flow. Run-mode tasks wait for explicit approval.",
+      inputSchema: {
+        prompt: z.string().min(1),
+        mode: z.enum(["plan", "review", "run"]).optional(),
+        workerTimeoutSeconds: z.number().int().positive().max(3600).optional(),
+        maxBudgetUsd: z.number().positive().max(5).optional(),
+        resourceProfile: z.string().min(1).optional(),
+        mockWorker: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      try {
+        const profile = resolveMcpResourceProfile(input);
+        const projectContext = resolveTaskProjectContext(projectRegistry, input.prompt);
+        const task = await taskRuntime.createTask({
+          prompt: input.prompt,
+          mode: input.mode || "plan",
+          resourceProfile: profile.name,
+          workerTimeoutSeconds: profile.limits.timeoutSeconds,
+          maxBudgetUsd: profile.limits.maxBudgetUsd,
+          maxTurns: profile.limits.maxTurns,
+          maxFilesRead: profile.limits.maxFilesRead,
+          maxCommands: profile.limits.maxCommands,
+          mockWorker: input.mockWorker === true,
+          projectContext
+        });
+        return jsonToolResult({ status: "success", taskId: task.taskId, task });
+      } catch (error) {
+        return jsonToolResult({ status: "invalid_input", error: error.message });
+      }
+    }
+  );
+
+  server.registerTool(
+    "cc_get_task",
+    {
+      title: "Get Durable Worker Task",
+      description: "Read the current persistent task snapshot, including activity, stage, heartbeat, and attempts.",
+      inputSchema: { taskId: taskIdSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ taskId }) => {
+      const task = await taskRuntime.getTask(taskId);
+      return jsonToolResult(task ? { status: "success", task } : { status: "task_not_found", taskId });
+    }
+  );
+
+  server.registerTool(
+    "cc_list_tasks",
+    {
+      title: "List Durable Worker Tasks",
+      description: "List persistent tasks, optionally filtered by lifecycle status.",
+      inputSchema: {
+        status: z.enum(["queued", "running", "waiting_approval", "succeeded", "failed", "cancelled", "interrupted"]).optional(),
+        limit: z.number().int().positive().max(200).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      const tasks = await taskRuntime.listTasks({ status: input.status || null, limit: input.limit || 50 });
+      return jsonToolResult({ status: "success", tasks });
+    }
+  );
+
+  server.registerTool(
+    "cc_get_task_events",
+    {
+      title: "Get Durable Worker Task Events",
+      description: "Read task lifecycle and activity events after a sequence cursor.",
+      inputSchema: {
+        taskId: taskIdSchema,
+        afterSequence: z.number().int().nonnegative().optional(),
+        limit: z.number().int().positive().max(500).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      const result = await taskRuntime.getTaskEvents(input.taskId, { afterSequence: input.afterSequence || 0, limit: input.limit || 200 });
+      return jsonToolResult(result ? { status: "success", ...result } : { status: "task_not_found", taskId: input.taskId });
+    }
+  );
+
+  server.registerTool(
+    "cc_approve_task",
+    {
+      title: "Approve Durable Run Task",
+      description: "Approve the exact revision, prompt hash, and capability boundary of a waiting run task.",
+      inputSchema: {
+        taskId: taskIdSchema,
+        approvedBy: z.string().min(1),
+        approvalReason: z.string().min(1)
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (input = {}) => {
+      try {
+        const task = await taskRuntime.approveTask(input.taskId, input);
+        return jsonToolResult({ status: "success", task });
+      } catch (error) {
+        return jsonToolResult({ status: "approval_failed", taskId: input.taskId, error: error.message });
+      }
+    }
+  );
+
+  server.registerTool(
+    "cc_cancel_task",
+    {
+      title: "Cancel Durable Worker Task",
+      description: "Cancel a queued or waiting task, or request termination of its active Worker process tree.",
+      inputSchema: {
+        taskId: taskIdSchema,
+        requestedBy: z.string().min(1).optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (input = {}) => {
+      const task = await taskRuntime.cancelTask(input.taskId, { requestedBy: input.requestedBy || "operator" });
+      return jsonToolResult(task ? { status: "success", task } : { status: "task_not_found", taskId: input.taskId });
+    }
+  );
+
+  const workflowIdSchema = z.string().regex(/^workflow_[a-zA-Z0-9_-]+$/);
+  const workflowRoleSchema = z.enum(["planner", "coder", "reviewer"]);
+  const supervisorDecisionInputSchema = z.object({
+    intent: z.enum(["code_change", "documentation_change", "analysis", "conversation", "unknown"]),
+    goal: z.string().min(1).optional(),
+    goalConfidence: z.number().min(0).max(1).optional(),
+    possibleIntentMismatch: z.string().min(1).max(2000).nullable().optional(),
+    clarificationNeeded: z.boolean().optional(),
+    technical_summary: z.string().min(1).max(4000).optional(),
+    implementation_strategy: z.string().min(1).max(6000).optional(),
+    expected_changes: z.array(z.string().min(1)).max(20).optional(),
+    validation_plan: z.array(z.string().min(1)).max(20).optional(),
+    project: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    reasoning: z.array(z.string().min(1)).min(1).max(12),
+    risks: z.array(z.string().min(1)).max(12).optional(),
+    workflowType: z.string().min(1),
+    estimated_resources: z.object({
+      complexity: z.enum(["low", "medium", "high"]).optional(),
+      expected: z.object({
+        budgetUsd: z.number().nonnegative().optional(),
+        turns: z.number().int().nonnegative().optional(),
+        filesRead: z.number().int().nonnegative().optional(),
+        commands: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().nonnegative().optional()
+      }).optional(),
+      notes: z.array(z.string().min(1)).max(8).optional()
+    }).optional(),
+    recommended_actions: z.array(z.string().min(1)).max(12).optional(),
+    confidence: z.number().min(0).max(1),
+    nextAction: z.enum(["create_workflow", "confirm_project", "respond_directly", "request_clarification"])
+  });
+
+  server.registerTool(
+    "cc_create_workflow",
+    {
+      title: "Create Supervisor Workflow",
+      description: "After cc_list_projects, cc_get_project_context, and cc_list_workflow_definitions, act as the accountable technical Supervisor: confirm one exact projectId, understand AI_SUPERVISOR.md and Project Memory, optionally reuse a returned sessionId, and provide technical_summary, implementation_strategy, expected_changes, and validation_plan. Never infer workspacePath or ask a Worker to guess it. A GPT-authored create_workflow Decision without explicit projectId is rejected. Approval-gated implementation remains blocked on explicit human approval.",
+      inputSchema: {
+        userRequest: z.string().min(1),
+        definitionId: z.string().min(1).optional(),
+        project: z.string().min(1).optional(),
+        projectId: z.string().min(1).optional(),
+        decisionId: z.string().regex(/^decision_[a-zA-Z0-9_-]+$/).optional(),
+        clarificationDecisionId: z.string().regex(/^decision_[a-zA-Z0-9_-]+$/).optional(),
+        clarificationResponse: z.string().min(1).max(5000).optional(),
+        sessionId: z.string().regex(/^session_[a-zA-Z0-9_-]+$/).optional(),
+        sessionName: z.string().min(1).max(120).optional(),
+        supervisorSession: z.object({
+          purpose: z.string().min(1).max(2000).optional(),
+          decisions: z.array(z.string().min(1).max(2000)).max(50).optional(),
+          unresolvedQuestions: z.array(z.string().min(1).max(2000)).max(50).optional(),
+          nextActions: z.array(z.string().min(1).max(2000)).max(50).optional()
+        }).optional(),
+        supervisorDecision: supervisorDecisionInputSchema.optional(),
+        mockWorker: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      try {
+        const outcome = await supervisorService.submitRequest(input);
+        return jsonToolResult({ ...outcome, workflowId: outcome.workflow?.workflowId || null });
+      } catch (error) {
+        return jsonToolResult(unknownWorkflowDefinitionResult(error, input, workflowDefinitions) || { status: "invalid_input", error: error.message });
+      }
+    }
+  );
+
+  server.registerTool(
+    "cc_add_workflow_task",
+    {
+      title: "Add Role Task to Workflow",
+      description: "Compatibility operation for legacy non-orchestrated Workflows. Orchestrated Workflows create stage Tasks automatically.",
+      inputSchema: {
+        workflowId: workflowIdSchema,
+        role: workflowRoleSchema,
+        prompt: z.string().min(1),
+        workerTimeoutSeconds: z.number().int().positive().max(3600).optional(),
+        maxBudgetUsd: z.number().positive().max(5).optional(),
+        resourceProfile: z.string().min(1).optional(),
+        mockWorker: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      try {
+        const profileInput = input.role === "reviewer" && !input.resourceProfile ? { ...input, resourceProfile: "review_readonly" } : input;
+        const profile = resolveMcpResourceProfile(profileInput);
+        const result = await workflowRuntime.createTask(input.workflowId, {
+          role: input.role,
+          prompt: input.prompt,
+          resourceProfile: profile.name,
+          workerTimeoutSeconds: profile.limits.timeoutSeconds,
+          maxBudgetUsd: profile.limits.maxBudgetUsd,
+          maxTurns: profile.limits.maxTurns,
+          maxFilesRead: profile.limits.maxFilesRead,
+          maxCommands: profile.limits.maxCommands,
+          mockWorker: input.mockWorker === true
+        });
+        return jsonToolResult({ status: "success", workflowId: input.workflowId, taskId: result.task.taskId, ...result });
+      } catch (error) {
+        return jsonToolResult({ status: "invalid_input", error: error.message });
+      }
+    }
+  );
+
+  server.registerTool(
+    "cc_approve_workflow",
+    {
+      title: "Approve Workflow Implementation Stage",
+      description: "Record explicit human approval for the waiting implementation stage. Only then does the Orchestrator create and approve the coder Task against its exact prompt and capability boundary.",
+      inputSchema: {
+        workflowId: workflowIdSchema,
+        approvedBy: z.string().min(1),
+        approvalReason: z.string().min(1)
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (input = {}) => {
+      try {
+        const workflow = await workflowRuntime.approveWorkflow(input.workflowId, input);
+        return jsonToolResult({ status: "success", workflowId: input.workflowId, workflow });
+      } catch (error) {
+        return jsonToolResult({ status: "approval_failed", workflowId: input.workflowId, error: error.message });
+      }
+    }
+  );
+
+  server.registerTool(
+    "cc_get_workflow",
+    {
+      title: "Get Supervisor Workflow",
+      description: "Read a Workflow with live aggregate status and its associated role Tasks.",
+      inputSchema: { workflowId: workflowIdSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workflowId }) => {
+      const workflow = await workflowRuntime.getWorkflow(workflowId);
+      return jsonToolResult(workflow ? { status: "success", workflow } : { status: "workflow_not_found", workflowId });
+    }
+  );
+
+  server.registerTool(
+    "cc_get_supervisor_review_package",
+    {
+      title: "Get Supervisor Review Package",
+      description: "Build and persist a read-only review package for ChatGPT Web containing the original request, Supervisor Decision, implementation strategy, reported and observed changes, strict audit evidence, reviewer result, bound project context, the Project Memory snapshot captured by the Decision, Review-in-ChatGPT guidance, any explicitly persisted Supervisor Review Result, and an evidence-first Memory Update Proposal when warranted. GPT-owned judgment fields remain empty until a confirmed result is submitted. This tool never runs a Worker or modifies Project Memory.",
+      inputSchema: { workflowId: workflowIdSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workflowId }) => {
+      const reviewPackage = await supervisorService.getWorkflowReviewPackage(workflowId);
+      return jsonToolResult(reviewPackage ? { status: "success", reviewPackage } : { status: "workflow_not_found", workflowId });
+    }
+  );
+
+  server.registerTool(
+    "cc_record_supervisor_review_result",
+    {
+      title: "Record Confirmed Supervisor Review Result",
+      description: "Persist a ChatGPT Supervisor judgment as an additive record on a terminal Workflow. Call only after the user explicitly asks to save the review and supply confirmation metadata. This does not change Workflow state, approve work, start a Worker, or modify Project Memory.",
+      inputSchema: {
+        workflowId: workflowIdSchema,
+        conclusion: z.enum(["accept", "revise", "investigate"]),
+        goalAlignment: z.string().min(1).max(6000),
+        architectureAssessment: z.string().min(1).max(6000),
+        risks: z.array(z.string().min(1).max(2000)).max(30).optional(),
+        recommendations: z.array(z.string().min(1).max(2000)).max(30).optional(),
+        nextSteps: z.array(z.string().min(1).max(2000)).max(30).optional(),
+        memoryUpdateNeeded: z.boolean().nullable().optional(),
+        submittedBy: z.string().min(1).max(100),
+        confirmationReason: z.string().min(1).max(1000),
+        confirmed: z.literal(true)
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (input) => {
+      try { return jsonToolResult({ status: "success", reviewResult: await supervisorService.recordSupervisorReview(input) }); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+    }
+  );
+
+  server.registerTool(
+    "cc_apply_memory_update_proposal",
+    {
+      title: "Apply Confirmed Project Memory Proposal",
+      description: "Apply one existing evidence-first Memory Update Proposal by appending a traced Recent Evolution entry to PROJECT_MEMORY.md. Requires explicit human confirmation metadata and the exact proposalId. This never runs a Worker, rewrites history, or applies automatically.",
+      inputSchema: {
+        workflowId: workflowIdSchema,
+        proposalId: z.string().regex(/^memory_proposal_workflow_[a-zA-Z0-9_-]+$/),
+        appliedBy: z.string().min(1).max(100),
+        confirmationReason: z.string().min(1).max(1000),
+        confirmed: z.literal(true)
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (input) => {
+      try { return jsonToolResult({ status: "success", ...(await supervisorService.applyMemoryProposal(input)) }); }
+      catch (error) { return jsonToolResult({ status: "invalid_input", error: error.message }); }
+    }
+  );
+
+  server.registerTool(
+    "cc_list_workflows",
+    {
+      title: "List Supervisor Workflows",
+      description: "List persistent Workflows with live status and role Task counts.",
+      inputSchema: {
+        status: z.enum(["created", "planning", "planned", "waiting_approval", "running", "reviewing", "completed", "failed", "queued", "succeeded"]).optional(),
+        limit: z.number().int().positive().max(200).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => jsonToolResult({ status: "success", workflows: await workflowRuntime.listWorkflows({ status: input.status || null, limit: input.limit || 50 }) })
+  );
+
+  server.registerTool(
+    "cc_get_workflow_events",
+    {
+      title: "Get Supervisor Workflow Events",
+      description: "Read the merged Workflow and child Task event timeline after a cursor.",
+      inputSchema: {
+        workflowId: workflowIdSchema,
+        afterSequence: z.number().int().nonnegative().optional(),
+        limit: z.number().int().positive().max(1000).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (input = {}) => {
+      const result = await workflowRuntime.getWorkflowEvents(input.workflowId, { afterSequence: input.afterSequence || 0, limit: input.limit || 500 });
+      return jsonToolResult(result ? { status: "success", ...result } : { status: "workflow_not_found", workflowId: input.workflowId });
+    }
+  );
+
   return server;
 }
 
@@ -464,6 +960,23 @@ function isAllowedOrigin(originHeader) {
   }
 }
 
+await taskRuntime.start();
+await workflowRuntime.start();
+await supervisorService.start();
+await providerPreflight.init();
+let retentionResult = { enabled: process.env.SUPERVISOR_DISABLE_RETENTION !== "1" && config.retention?.enabled !== false, removedDirectoryCount: 0 };
+if (retentionResult.enabled) {
+  const retentionPlan = await planRuntimeRetention({
+    dataRoot: runtimeDataRoot,
+    artifactRoots: [resolveInsideProject(".agents", "runs"), resolveInsideProject(".agent-runs")],
+    maxAgeDays: config.retention?.maxAgeDays,
+    maxWorkflows: config.retention?.maxWorkflows,
+    maxStandaloneTasks: config.retention?.maxStandaloneTasks,
+    maxDecisions: config.retention?.maxDecisions
+  });
+  retentionResult = await applyRuntimeRetention(retentionPlan);
+}
+
 const app = createMcpExpressApp();
 
 app.use((req, res, next) => {
@@ -475,13 +988,41 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/health", (req, res) => {
+app.get("/health", async (req, res) => {
   res.json({
     ok: true,
     service: "codex-claude-worker-harness-bridge",
     host: config.host || "127.0.0.1",
     port: config.port || 8787,
-    harness: getPingPayload()
+    harness: getPingPayload(),
+    taskRuntime: {
+      ok: taskRuntime.started,
+      dataRoot: normalizeSlashes(runtimeDataRoot),
+      maxConcurrentTasks: taskRuntime.maxConcurrentTasks
+    },
+    workflowRuntime: {
+      ok: workflowRuntime.started,
+      dataRoot: normalizeSlashes(path.join(runtimeDataRoot, "workflows"))
+    },
+    supervisor: {
+      ok: true,
+      projectCount: (await supervisorService.listProjects()).length,
+      decisionsRoot: normalizeSlashes(supervisorStore.decisionsRoot)
+    },
+    providerPreflight: {
+      available: true,
+      latest: await providerPreflight.getLatest()
+    },
+    retention: retentionResult
+  });
+});
+
+registerSupervisorDashboardRoutes(app, { taskRuntime, workflowRuntime, supervisorService, supervisorSettings, providerPreflight, taskRunner, workflowMetadataStore, dashboardRoot: supervisorDashboardRoot });
+
+app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
+  res.json({
+    resource: `${req.protocol}://${req.get("host")}/mcp`,
+    authorization_servers: []
   });
 });
 

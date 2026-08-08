@@ -64,6 +64,46 @@ http://<local-bind-host>:<local-port>/mcp
 
 ## Tools
 
+Durable asynchronous Task Runtime:
+
+- `cc_create_task`: persists a Task and returns its `taskId` immediately. `run` mode starts in `waiting_approval`.
+- `cc_get_task`: returns lifecycle status, activity, stage, heartbeat, current Attempt, and result reference.
+- `cc_list_tasks`: lists persisted tasks with an optional status filter.
+- `cc_get_task_events`: returns lifecycle events after a sequence cursor.
+- `cc_approve_task`: approves the exact revision, prompt hash, and capability boundary of a waiting run Task.
+- `cc_cancel_task`: cancels pending work or terminates the active Harness process tree.
+
+GPT-native Supervisor Brain, Project Context, Workflow Planning, and Orchestrator:
+
+- `cc_list_projects`: returns the registered project contexts before ChatGPT makes or confirms a Decision.
+- `cc_get_project_context`: returns the selected Project's Registry-owned `workspacePath`, stack, constraints, optional GPT-only `AI_SUPERVISOR.md`, `PROJECT_MEMORY.md`, and Runtime Sessions. It is read-only and does not start a Workflow or Task.
+- `cc_get_project_continuity`: returns a compact evidence-derived Project Brief, Memory summary, Supervisor Sessions, recent Workflows, and open issues. It is read-only, omits raw events, and does not advance Runtime state.
+- `cc_list_workflow_definitions`: returns the exact legal Workflow IDs, stages, approval requirements, Resource Profiles, and usage hints.
+- `cc_create_workflow`: persists a Supervisor Decision and requires an explicit registered `projectId` for GPT-authored `create_workflow` requests. Optional `sessionId` reuses one Session only when it belongs to that Project; otherwise Runtime creates a new Session. Existing local/legacy callers remain valid; ambiguous projects return `project_confirmation_required`. Goal ambiguity returns `clarification_required` without creating a Workflow; a later explicit response regenerates a linked Decision through the same tool.
+- `cc_approve_workflow`: records human approval and only then creates and approves the coder Task through the existing Task Runtime boundary.
+- `cc_add_workflow_task`: retained for legacy non-orchestrated v0.2 Workflows.
+- `cc_get_workflow` and `cc_list_workflows`: return live status aggregation without changing Task state.
+- `cc_get_workflow_events`: merges Workflow association events with existing child Task events.
+- `cc_get_supervisor_review_package`: returns the evidence package and any previously confirmed Supervisor Review Result without changing Workflow state.
+- `cc_record_supervisor_review_result`: persists a ChatGPT Supervisor conclusion only with explicit confirmation metadata; it does not approve work or modify Memory.
+- `cc_apply_memory_update_proposal`: applies the exact stored proposal only with explicit confirmation, appends to `PROJECT_MEMORY.md`, and records a separate application history. It accepts no arbitrary Memory text and never starts a Worker.
+
+Supervisor Decisions are stored under `runtime-data/supervisor-decisions/`; Supervisor Sessions under `runtime-data/project-sessions/`; derived Project Briefs under `runtime-data/project-briefs/`; registered context comes from `.agents/projects.json` plus optional `AI_SUPERVISOR.md` and `PROJECT_MEMORY.md`. Raw GPT conversation history is not stored or copied into Worker prompts. New Workflow, Task, and Attempt snapshots carry `projectId`, `workspacePath`, and `sessionId`; Task/Attempt also expose the actual Harness `executionDirectory`. Workflow data remains under `runtime-data/workflows/`, and the Orchestrator still cannot synthesize approval.
+
+Recommended GPT Supervisor sequence:
+
+1. `cc_list_projects`
+2. `cc_get_project_context` for the selected project
+3. optionally `cc_get_project_continuity` when continuing prior project work
+4. `cc_list_workflow_definitions`
+5. `cc_create_workflow` with explicit `projectId`, optional same-project `sessionId`, and a complete technical Decision
+6. after completion, `cc_get_supervisor_review_package`; save the GPT judgment only on explicit request with `cc_record_supervisor_review_result`
+7. apply a pending Memory Proposal only after a separate explicit confirmation with `cc_apply_memory_update_proposal`
+
+The local product API also exposes an isolated Provider Preflight and failed-Workflow recovery for the Dashboard. These are not new MCP tools, Agent roles, or Workflow definitions. Preflight runs a fixed prompt in an empty temporary directory with tools disabled; recovery creates a new Workflow from Planning and never copies approval metadata.
+
+Legacy synchronous compatibility tools:
+
 - `cc_ping`: checks project root and harness script presence.
 - `cc_plan_task`: calls `claude-task.ps1 plan -Task ...`.
 - `cc_review_task`: calls `claude-task.ps1 review -Task ...`.
@@ -106,13 +146,16 @@ Copy `config.example.json` to `config.json` and adjust it locally. Do not commit
 {
   "projectRoot": "D:/path/to/your/project",
   "workerTimeoutSeconds": 300,
-  "maxBudgetUsd": 0.20,
   "defaultApprovedBy": null,
   "defaultApprovalReason": null,
   "host": "127.0.0.1",
   "port": 8787,
   "stdoutLimit": 12000,
   "stderrLimit": 12000,
+  "runtimeDataRoot": "runtime-data",
+  "taskHeartbeatSeconds": 15,
+  "taskStalledAfterSeconds": 60,
+  "maxConcurrentTasks": 1,
   "allowedOrigins": [
     "https://chatgpt.com",
     "https://chat.openai.com"
@@ -122,9 +165,24 @@ Copy `config.example.json` to `config.json` and adjust it locally. Do not commit
 
 If an HTTP `Origin` header is present, the bridge validates it. Localhost origins are allowed; other origins must appear in `allowedOrigins`.
 
+`runtimeDataRoot` must resolve inside `projectRoot`. The first-stage runtime intentionally uses local files rather than a database. Keep `maxConcurrentTasks` at `1` unless the project and Worker provider are known to support concurrent edits.
+
 There is no application authentication layer in the local bridge. Keep it bound to a local interface and use OpenAI Secure MCP Tunnel or an independently authenticated reverse proxy for remote access.
 
-Every task tool accepts an optional `maxBudgetUsd` capped at `5.00`. The bridge default is `0.20`, independent of a larger project-local Claude wrapper default.
+Every task tool accepts an optional `maxBudgetUsd` capped at `5.00`. A request-level value is an explicit override; legacy Bridge defaults do not override Resource Profile limits.
+
+`cc_plan_task`, `cc_review_task`, `cc_run_approved_task`, and `cc_create_task` also accept an optional `resourceProfile`. Omit it to use `small_readonly`, except that `cc_review_task` uses the focused `review_readonly` default. Resolution order is request-level `maxBudgetUsd` / `workerTimeoutSeconds`, selected profile defaults, then the system default profile; all resolved values remain subject to the global hard limits. Unknown profile names return `invalid_input`; no automatic profile selection is performed.
+
+The Supervisor Console is served at `/supervisor/`. Read endpoints expose Workflow/Task summaries, events, audit evidence, and allowlisted local artifacts. Three product endpoints provide the user-facing control path:
+
+- `GET /api/supervisor/projects` lists registered projects with runtime-derived last-used timestamps;
+- `POST /api/supervisor/workflows` persists a Decision and creates a Workflow only after project resolution;
+- `POST /api/supervisor/workflows/:workflowId/approve` records explicit human approval through `WorkflowRuntime.approveWorkflow`;
+- `POST /api/supervisor/workflows/:workflowId/reject` terminates a waiting Workflow before any coder Task exists.
+
+The product API never calls the Harness or Worker directly. Approve still binds the existing Task Runtime prompt hash and capability boundary; Reject creates no write-capable Task. Technical Task IDs, Attempts, raw artifacts, and events remain available under a collapsed Console section.
+
+State-changing product routes require a loopback browser `Origin` (`127.0.0.1`, `localhost`, or IPv6 loopback). Requests with a missing or remote Origin are rejected. This keeps the local Console control surface separate from the Tunnel-facing MCP surface.
 
 The current implementation strips a UTF-8 BOM when reading JSON config/result files. This keeps PowerShell-edited JSON usable.
 

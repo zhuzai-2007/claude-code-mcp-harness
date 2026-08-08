@@ -7,9 +7,19 @@
   "port": 8787,
   "stdoutLimit": 12000,
   "stderrLimit": 12000,
+  "runtimeDataRoot": "runtime-data",
+  "taskHeartbeatSeconds": 15,
+  "taskStalledAfterSeconds": 60,
+  "maxConcurrentTasks": 1,
+  "retention": {
+    "enabled": true,
+    "maxAgeDays": 30,
+    "maxWorkflows": 200,
+    "maxStandaloneTasks": 200,
+    "maxDecisions": 500
+  },
   "allowedOrigins": [
     "https://chatgpt.com",
     "https://chat.openai.com"
-  ],
-  "maxBudgetUsd": 0.2
+  ]
 }

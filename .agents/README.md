@@ -23,7 +23,7 @@ Future MCP wrappers should call the CLI through JSON input and consume `worker-r
 .\.agents\claude-task.ps1 plan -InputJson .\task.json
 ```
 
-The seven Worker-required fields remain stable: `summary`, `files_read`, `changes_made`, `commands_run`, `tests_or_checks`, `risks`, and `blocked_on`. A successfully parsed strict Worker `summary` is stored in full. Optional supervisor fields include `observed_tools`, `observed_commands`, `permission_denials`, `observed_file_targets`, and `audit_issues`.
+Worker contracts are mode-specific. Plan mode requires `summary`, `files_read`, `proposed_changes`, `risks`, and `blocked_on`; it requires real Read evidence but not execution-stage changes, commands, or checks. Review mode retains the seven execution-audit fields: `summary`, `files_read`, `changes_made`, `commands_run`, `tests_or_checks`, `risks`, and `blocked_on`. Run mode retains those seven fields and additionally requires `run_result`: `{ "type": "modified" }` keeps the strict change and final-Read requirements, while `{ "type": "noop", "reason": "..." }` permits no changes only with a concrete reason, successful Read evidence, and a reported check. The CLI JSON Schema mirrors these run invariants, rejects placeholder terminal submissions, and treats StructuredOutput as a one-time terminal audit action. Any successful Write/Edit makes the Attempt permanently `modified`; a later tool call after StructuredOutput is rejected as `premature_audit_output`, and observed partial writes remain visible. A successfully parsed strict Worker `summary` is stored in full. Optional supervisor fields include `observed_tools`, `observed_commands`, `permission_denials`, `observed_file_targets`, and `audit_issues`.
 
 Exit codes: `0=success`, `1=worker_failed`, `2=policy_blocked`, `3=invalid_input`, `4=environment_failed`.
 
@@ -40,11 +40,11 @@ Mock mode is opt-in only. The default behavior still invokes Claude Code after p
 
 ## Budget
 
-Default Claude worker budget is `0.20` USD per run. This default is intentionally conservative.
+The default `small_readonly` profile allows up to `1.00` USD per run. Use a lower explicit limit for tiny checks when appropriate.
 
 `MaxBudgetUsd` is the Claude Code / wrapper-side estimated budget. With third-party or domestic-model adapters, it may not match the actual amount charged by the upstream API platform.
 
-For real small tasks that need more room, use a temporary explicit budget:
+For tightly bounded low-cost checks, use a temporary lower explicit budget; explicit values still override the profile:
 
 ```powershell
 .\.agents\claude-task.ps1 plan -Task "Return exactly OK and nothing else." -MaxBudgetUsd 0.20
@@ -53,17 +53,19 @@ For real small tasks that need more room, use a temporary explicit budget:
 
 The budget must be positive. The portable template currently rejects values above `5.00`. Raising it can increase actual API cost, so use the smallest value that fits the task.
 
-Project-local defaults can be placed in `.agents/local.config.json`:
-
-```json
-{
-  "maxBudgetUsd": 1.00
-}
-```
-
-Do not commit `.agents/local.config.json`; command-line `-MaxBudgetUsd` takes precedence over local config. If your adapter is calibrated differently and you need a higher ceiling, that requires a local wrapper/policy change and should be treated as an operator decision because it can increase real cost.
+Resource limits come from an explicit command/InputJson override or the selected Resource Profile. Legacy `.agents/local.config.json` budget values do not override a profile. If your adapter is calibrated differently, select an appropriate profile or pass an explicit `-MaxBudgetUsd`; the global hard limit still applies.
 
 Cost control should not rely only on `MaxBudgetUsd`. Keep tasks split, use appropriate `WorkerTimeoutSeconds`, bound file reads, and keep networking, dependency installation, git operations, and deletion disabled unless explicitly required and approved.
+
+## Resource profiles
+
+`.agents/resource-profiles.json` defines targeted read, exploration, review, analysis, and small/medium/large change envelopes. For `software_change`, the Workflow Definition keeps `small_change` as a compatibility fallback; after the read-only Planner succeeds, Workflow Runtime derives a bounded small/medium/large tier from the audited plan scope and freezes the selected profile before approval. The selection cannot name a profile outside the Definition whitelist or exceed the global hard limits. Direct Harness calls can still select a profile without changing the common Worker audit fields or run-result rules:
+
+```powershell
+.\.agents\claude-task.ps1 plan -Task "Explore the project structure and identify relevant architecture files." -ResourceProfile exploration_readonly
+```
+
+Profiles resolve budget, turns, successful read calls, commands, and timeout. Explicit CLI/InputJson values override the selected profile but cannot exceed the file's global hard limits. The resolved profile, limits, and observed usage are stored in run metadata, normalized results, and the project ledger.
 
 ## Safety model
 
@@ -77,7 +79,7 @@ This harness is a policy and workflow boundary, not a full OS-level sandbox. She
 
 ## Project ledger
 
-Every completed run appends one JSONL record to `.agent-runs/project-ledger.jsonl`. The ledger is runtime state and is ignored by Git. It records run id, mode, status, approval metadata, allowed actions, summary, changes, checks, risks, blocked items, cost, and error.
+Every completed run appends one JSONL record to `.agent-runs/project-ledger.jsonl`. The ledger is runtime state and is ignored by Git. It records run id, mode, status, approval metadata, allowed actions, summary, changes, checks, risks, blocked items, cost, resource profile/limits/usage, and error.
 
 ```powershell
 .\.agents\ledger.ps1 -Tail 20
@@ -105,7 +107,7 @@ Use the dedicated demo script to validate that approved `run` mode can make a ti
 .\.agents\approved-demo.ps1
 ```
 
-Real Claude worker calls can time out. Timeouts are reported as `worker_failed` with `error.code = worker_timeout`, and still write `result.json` plus `worker-result.normalized.json`.
+Real Claude worker calls can time out. Timeouts are reported as `worker_failed` with `error.code = timeout`, and still write `result.json` plus `worker-result.normalized.json`.
 ## Migration
 
 Install this harness into another project with:
@@ -114,7 +116,7 @@ Install this harness into another project with:
 .\install.ps1 -TargetProject D:/path/to/your/project
 ```
 
-The installer copies portable `.agents` files, initializes `.agents\runs\.gitkeep` and `.agents\local.config.json`, and does not copy historical runs. Existing `policy.json` is preserved unless `-Force` is supplied.
+The installer copies portable `.agents` files, initializes `.agents\runs\.gitkeep` and `.agents\local.config.json`, and does not copy historical runs. Existing `policy.json` and `resource-profiles.json` are preserved unless `-Force` is supplied.
 
 
 

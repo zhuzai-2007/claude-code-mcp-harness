@@ -15,6 +15,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $serverDir = Join-Path $repoRoot 'mcp-server'
 $configPath = Join-Path $serverDir 'config.json'
 $server = $null
+$isolatedRuntimeRelative = '.agent-runs/mcp-protocol-' + [guid]::NewGuid().ToString('N')
+$isolatedRuntimeRoot = Join-Path $repoRoot $isolatedRuntimeRelative
 
 if (-not (Test-Path -LiteralPath $configPath)) {
     & (Join-Path $PSScriptRoot 'init-config.ps1') -ProjectRoot $repoRoot
@@ -35,7 +37,16 @@ try {
     $startInfo.WorkingDirectory = $serverDir
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
-    $server = [System.Diagnostics.Process]::Start($startInfo)
+    $previousRuntimeRoot = $env:SUPERVISOR_RUNTIME_DATA_ROOT
+    $previousDisableRetention = $env:SUPERVISOR_DISABLE_RETENTION
+    try {
+        $env:SUPERVISOR_RUNTIME_DATA_ROOT = $isolatedRuntimeRelative
+        $env:SUPERVISOR_DISABLE_RETENTION = '1'
+        $server = [System.Diagnostics.Process]::Start($startInfo)
+    } finally {
+        $env:SUPERVISOR_RUNTIME_DATA_ROOT = $previousRuntimeRoot
+        $env:SUPERVISOR_DISABLE_RETENTION = $previousDisableRetention
+    }
     $ready = $false
     $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -71,4 +82,9 @@ try {
     }
 } finally {
     if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+    $resolvedIsolatedRoot = [System.IO.Path]::GetFullPath($isolatedRuntimeRoot)
+    $resolvedTestRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot '.agent-runs')) + [System.IO.Path]::DirectorySeparatorChar
+    if ($resolvedIsolatedRoot.StartsWith($resolvedTestRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $resolvedIsolatedRoot)) {
+        Remove-Item -LiteralPath $resolvedIsolatedRoot -Recurse -Force
+    }
 }

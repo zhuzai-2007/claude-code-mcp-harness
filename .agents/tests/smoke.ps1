@@ -6,12 +6,49 @@ $ErrorActionPreference = "Stop"
 
 $script = Join-Path (Split-Path -Parent $PSScriptRoot) 'claude-task.ps1'
 $ledgerScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'ledger.ps1'
+$agentsRoot = Split-Path -Parent $PSScriptRoot
+$projectRoot = Split-Path -Parent $agentsRoot
 $results = New-Object System.Collections.Generic.List[object]
 $runIdCounter = 0
 function Add-Result { param([string]$Name, [bool]$Passed, [string]$Detail) $script:results.Add([ordered]@{ name = $Name; passed = $Passed; detail = $Detail }) }
 function New-TestRunId {
     $script:runIdCounter++
     return (Get-Date).AddMilliseconds($script:runIdCounter).ToString('yyyyMMdd-HHmmss-fff')
+}
+function Resolve-TestRunArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string] $RunId,
+        [Parameter(Mandatory = $true)][string] $ArtifactName
+    )
+    $preferredPath = Join-Path (Join-Path (Join-Path $agentsRoot 'runs') $RunId) $ArtifactName
+    if (Test-Path -LiteralPath $preferredPath -PathType Leaf) { return $preferredPath }
+
+    $legacyPath = Join-Path (Join-Path (Join-Path $projectRoot '.agent-runs') $RunId) $ArtifactName
+    if (Test-Path -LiteralPath $legacyPath -PathType Leaf) { return $legacyPath }
+
+    return $null
+}
+
+$layoutProbeRunId = New-TestRunId
+$layoutProbeName = 'layout-probe.txt'
+$preferredProbeDir = Join-Path (Join-Path $agentsRoot 'runs') $layoutProbeRunId
+$legacyProbeDir = Join-Path (Join-Path $projectRoot '.agent-runs') $layoutProbeRunId
+$preferredProbePath = Join-Path $preferredProbeDir $layoutProbeName
+$legacyProbePath = Join-Path $legacyProbeDir $layoutProbeName
+try {
+    [System.IO.Directory]::CreateDirectory($preferredProbeDir) | Out-Null
+    [System.IO.Directory]::CreateDirectory($legacyProbeDir) | Out-Null
+    [System.IO.File]::WriteAllText($preferredProbePath, 'preferred', (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText($legacyProbePath, 'legacy', (New-Object System.Text.UTF8Encoding($false)))
+    $preferredResolved = Resolve-TestRunArtifact -RunId $layoutProbeRunId -ArtifactName $layoutProbeName
+    Remove-Item -LiteralPath $preferredProbePath -Force
+    $legacyResolved = Resolve-TestRunArtifact -RunId $layoutProbeRunId -ArtifactName $layoutProbeName
+    Add-Result 'run-artifact-layout-preferred-with-legacy-fallback' (($preferredResolved -eq $preferredProbePath) -and ($legacyResolved -eq $legacyProbePath)) "preferred=$($preferredResolved -eq $preferredProbePath) fallback=$($legacyResolved -eq $legacyProbePath)"
+} finally {
+    Remove-Item -LiteralPath $preferredProbePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $legacyProbePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $preferredProbeDir -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $legacyProbeDir -Force -ErrorAction SilentlyContinue
 }
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task 'smoke dry run' -DryRun *> $null
@@ -57,7 +94,7 @@ try {
     $nonStrictStatus = $nonStrict.status
     $nonStrictErrorCode = $nonStrict.error.code
 } catch {}
-Add-Result 'non-strict-recovery-needs-review' (($nonStrictExit -eq 1) -and ($nonStrictStatus -eq 'worker_failed') -and ($nonStrictErrorCode -eq 'audit_validation_failed')) "exit=$nonStrictExit status=$nonStrictStatus error=$nonStrictErrorCode"
+Add-Result 'non-strict-recovery-needs-review' (($nonStrictExit -eq 1) -and ($nonStrictStatus -eq 'worker_failed') -and ($nonStrictErrorCode -eq 'invalid_json')) "exit=$nonStrictExit status=$nonStrictStatus error=$nonStrictErrorCode"
 
 $fixtureDir = Join-Path $PSScriptRoot 'fixtures'
 $expectedUnicodeSummary = '编码检查：“中文”—OK'
@@ -97,14 +134,18 @@ try {
 Add-Result 'utf8-artifacts-have-no-bom' $noBomOk "checked normalized output, raw output, tool events, prompt, and system prompt"
 
 function Invoke-FixtureScenario {
-    param([string] $Scenario, [string] $Task)
+    param([string] $Scenario, [string] $Task, [string] $ResourceProfile, [ValidateSet('plan', 'review', 'run')][string] $Mode = 'plan', [string] $ProjectContextSnapshotFile)
     try {
         $previousPath = $env:PATH
         $previousScenario = $env:CLAUDE_TASK_FIXTURE_SCENARIO
         $env:PATH = $fixtureDir + [System.IO.Path]::PathSeparator + $previousPath
         $env:CLAUDE_TASK_FIXTURE_SCENARIO = $Scenario
         $fixtureRunId = New-TestRunId
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task $Task -NoBare -RunId $fixtureRunId *> $null
+        $fixtureArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script, $Mode, '-Task', $Task, '-NoBare', '-RunId', $fixtureRunId)
+        if ($ResourceProfile) { $fixtureArguments += @('-ResourceProfile', $ResourceProfile) }
+        if ($ProjectContextSnapshotFile) { $fixtureArguments += @('-ProjectContextSnapshotFile', $ProjectContextSnapshotFile) }
+        if ($Mode -eq 'run') { $fixtureArguments += @('-ApprovedBy', 'smoke-test', '-ApprovalReason', 'Verify final Read evidence after an approved write.') }
+        & powershell @fixtureArguments *> $null
         $fixtureExit = $LASTEXITCODE
     } finally {
         $env:PATH = $previousPath
@@ -113,6 +154,104 @@ function Invoke-FixtureScenario {
     $fixtureJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $fixtureRunId -Json 2>&1 | Out-String
     return [pscustomobject]@{ exitCode = $fixtureExit; result = ($fixtureJson | ConvertFrom-Json); runId = $fixtureRunId }
 }
+
+function Get-GeneratedSystemPrompt {
+    param([ValidateSet('plan', 'review', 'run')][string] $Mode)
+    $promptRunId = New-TestRunId
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script, $Mode, '-Task', "verify $Mode response contract", '-DryRun', '-RunId', $promptRunId)
+    if ($Mode -eq 'run') { $arguments += @('-ApprovedBy', 'smoke-test', '-ApprovalReason', 'Inspect generated run response contract.') }
+    & powershell @arguments *> $null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $promptResultJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $promptRunId -Json 2>&1 | Out-String
+    $promptResult = $promptResultJson | ConvertFrom-Json
+    return Get-Content -LiteralPath (Join-Path $promptResult.artifacts.run_dir 'system-prompt.txt') -Raw -Encoding UTF8
+}
+
+foreach ($contractMode in @('plan', 'review', 'run')) {
+    $generatedPrompt = Get-GeneratedSystemPrompt -Mode $contractMode
+    $missingContractFields = @(@('files_read', 'changes_made', 'commands_run', 'tests_or_checks', 'risks', 'blocked_on') | Where-Object { $generatedPrompt -notmatch [regex]::Escape($_) })
+    $hasCommonContract = $generatedPrompt -and
+        ($generatedPrompt -match 'exactly one valid JSON object and nothing else') -and
+        ($generatedPrompt -match 'Do not use a Markdown code fence') -and
+        ($generatedPrompt -match '"summary":"\.\.\."') -and
+        ($missingContractFields.Count -eq 0)
+    $hasModeContract = switch ($contractMode) {
+        'plan' { ($generatedPrompt -match 'plan: this mode analyzes the project and proposes an execution plan') -and ($generatedPrompt -match 'summary.*files_read.*proposed_changes.*risks.*blocked_on') -and ($generatedPrompt -match 'tests_or_checks.*optional') -and ($generatedPrompt -match 'follow only direct dependencies') -and ($generatedPrompt -match 'Reserve enough time and budget') -and ($generatedPrompt -match 'normal human approval.*Workflow transition, not a Worker blocker') -and ($generatedPrompt -match 'Existing immediate subdirectories under workspace') -and ($generatedPrompt -match 'navigation metadata, not Worker Read evidence') -and ($generatedPrompt -match 'project-context-snapshot\.json') -and ($generatedPrompt -match 'failed Read.*must never appear') -and ($generatedPrompt -match 'Never claim guessed README') }
+        'review' { ($generatedPrompt -match 'focused change verifier') -and ($generatedPrompt -match 'Read every reported modified file first') -and ($generatedPrompt -match 'Do not scan the whole repository') -and ($generatedPrompt -match 'changes_made.*must be an empty array') -and ($generatedPrompt -match 'commands_run.*must be an empty array') }
+        'run' { ($generatedPrompt -match 'run_result.*modified.*noop') -and ($generatedPrompt -match 'run modified:.*changes_made.*must not be empty') -and ($generatedPrompt -match 'Write, Edit, and MultiEdit results.*are not verification evidence') -and ($generatedPrompt -match 'Read tool once more on every file listed') -and ($generatedPrompt -match 'run noop:.*changes_made.*empty array') -and ($generatedPrompt -match 'run_result.reason.*concrete reason') -and ($generatedPrompt -match 'StructuredOutput is the terminal audit submission') -and ($generatedPrompt -match 'once any Write, Edit, or MultiEdit succeeds.*permanently "modified"') -and ($generatedPrompt -match 'requires creating a file but Write is unavailable.*do not leave a partial implementation') }
+    }
+    Add-Result "prompt-contract-$contractMode" ($hasCommonContract -and $hasModeContract) "common=$hasCommonContract mode=$hasModeContract"
+}
+
+$schemaRunId = New-TestRunId
+& powershell -NoProfile -ExecutionPolicy Bypass -File $script run -Task 'verify CLI structured output enforcement' -ApprovedBy 'smoke-test' -ApprovalReason 'Inspect the generated run schema.' -DryRun -RunId $schemaRunId *> $null
+$schemaDryRunExit = $LASTEXITCODE
+$schemaCommandPath = if ($schemaDryRunExit -eq 0) { Resolve-TestRunArtifact -RunId $schemaRunId -ArtifactName 'command.txt' } else { $null }
+$schemaCommand = if ($schemaCommandPath) { Get-Content -LiteralPath $schemaCommandPath -Raw } else { '' }
+Add-Result 'schema-artifact-layout-resolved' (($schemaDryRunExit -eq 0) -and -not [string]::IsNullOrWhiteSpace($schemaCommandPath)) "exit=$schemaDryRunExit pathResolved=$(-not [string]::IsNullOrWhiteSpace($schemaCommandPath))"
+Add-Result 'cli-json-schema-enforced' (($schemaCommand -match '--json-schema') -and ($schemaCommand -match 'proposed_changes')) "schemaFlag=$($schemaCommand -match '--json-schema')"
+Add-Result 'run-json-schema-rejects-empty-terminal-audit' (($schemaCommand -match 'allOf') -and ($schemaCommand -match 'minItems') -and ($schemaCommand -match 'maxItems') -and ($schemaCommand -match 'placeholder') -and ($schemaCommand -match 'reason')) "conditional=$($schemaCommand -match 'allOf') placeholderGuard=$($schemaCommand -match 'placeholder')"
+Add-Result 'system-prompt-uses-file-on-windows' (($schemaCommand -match '--system-prompt-file') -and ($schemaCommand -notmatch '--system-prompt\s+"You are Claude Code')) "fileFlag=$($schemaCommand -match '--system-prompt-file')"
+
+$missingField = Invoke-FixtureScenario -Scenario 'missing-required-field' -Task 'return an audit result that omits one required field'
+Add-Result 'missing-required-field-is-rejected' (($missingField.exitCode -eq 1) -and ($missingField.result.status -eq 'worker_failed') -and ($missingField.result.error.code -eq 'audit_validation_failed') -and ($missingField.result.error.message -match 'missing_required_field:risks')) "exit=$($missingField.exitCode) error=$($missingField.result.error.message)"
+
+$completeAudit = Invoke-FixtureScenario -Scenario 'complete-audit-json' -Task 'read README and return the complete audit JSON contract'
+$completeAuditIssueCount = @($completeAudit.result.audit_issues).Count
+Add-Result 'complete-json-audit-contract-passes' (($completeAudit.exitCode -eq 0) -and ($completeAudit.result.status -eq 'success') -and ($completeAuditIssueCount -eq 0) -and ($completeAudit.result.observed_tools -contains 'Read')) "exit=$($completeAudit.exitCode) status=$($completeAudit.result.status) audit_issues=$completeAuditIssueCount"
+
+$dotDirectoryRead = Invoke-FixtureScenario -Scenario 'dot-directory-read' -Task 'read a dot-directory policy file and report its relative path'
+Add-Result 'dot-directory-read-path-matches-evidence' (($dotDirectoryRead.exitCode -eq 0) -and ($dotDirectoryRead.result.status -eq 'success') -and (@($dotDirectoryRead.result.audit_issues).Count -eq 0) -and ($dotDirectoryRead.result.files_read -contains '.agents/policy.json')) "exit=$($dotDirectoryRead.exitCode) status=$($dotDirectoryRead.result.status) audit_issues=$(@($dotDirectoryRead.result.audit_issues) -join ',')"
+
+$planWithProposal = Invoke-FixtureScenario -Scenario 'plan-with-proposed-changes' -Task 'inspect the task board and propose search changes'
+Add-Result 'plan-read-with-proposed-changes-passes' (($planWithProposal.exitCode -eq 0) -and ($planWithProposal.result.status -eq 'success') -and (@($planWithProposal.result.proposed_changes).Count -gt 0) -and (@($planWithProposal.result.changes_made).Count -eq 0) -and ($planWithProposal.result.observed_tools -contains 'Read')) "exit=$($planWithProposal.exitCode) status=$($planWithProposal.result.status) proposals=$(@($planWithProposal.result.proposed_changes).Count)"
+
+$snapshotSource = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.agent-runs\fixture-project-context-snapshot.json'
+[System.IO.Directory]::CreateDirectory((Split-Path -Parent $snapshotSource)) | Out-Null
+[System.IO.File]::WriteAllText($snapshotSource, '{"projectRoot":"workspace/empty-project","entries":[],"empty":true,"generatedAt":"2026-07-19T00:00:00.000Z"}', (New-Object System.Text.UTF8Encoding($false)))
+try {
+    $emptyProjectPlan = Invoke-FixtureScenario -Scenario 'plan-empty-project-snapshot' -Task 'plan the first bounded files for an empty project' -ResourceProfile 'exploration_readonly' -ProjectContextSnapshotFile $snapshotSource
+} finally {
+    Remove-Item -LiteralPath $snapshotSource -Force -ErrorAction SilentlyContinue
+}
+$emptySnapshotArtifact = [string]$emptyProjectPlan.result.artifacts.project_context_snapshot
+Add-Result 'plan-empty-project-snapshot-passes' (($emptyProjectPlan.exitCode -eq 0) -and ($emptyProjectPlan.result.status -eq 'success') -and (@($emptyProjectPlan.result.files_read).Count -eq 1) -and (Test-Path -LiteralPath $emptySnapshotArtifact)) "exit=$($emptyProjectPlan.exitCode) status=$($emptyProjectPlan.result.status) snapshot=$emptySnapshotArtifact"
+
+$planApprovalBlocker = Invoke-FixtureScenario -Scenario 'plan-approval-as-blocker' -Task 'misreport the normal approval transition as a blocker'
+Add-Result 'plan-approval-blocker-still-fails' (($planApprovalBlocker.exitCode -eq 1) -and ($planApprovalBlocker.result.error.code -eq 'worker_blocked') -and ($planApprovalBlocker.result.error.message -match 'Awaiting human approval')) "exit=$($planApprovalBlocker.exitCode) error=$($planApprovalBlocker.result.error.message)"
+
+$planMissingFields = Invoke-FixtureScenario -Scenario 'plan-missing-summary-files-read' -Task 'return an invalid plan without summary or files_read'
+Add-Result 'plan-missing-summary-files-read-fails' (($planMissingFields.exitCode -eq 1) -and ($planMissingFields.result.status -eq 'worker_failed') -and ($planMissingFields.result.error.code -eq 'audit_validation_failed') -and ($planMissingFields.result.error.message -match 'missing_required_field:summary') -and ($planMissingFields.result.error.message -match 'missing_required_field:files_read')) "exit=$($planMissingFields.exitCode) error=$($planMissingFields.result.error.message)"
+
+$focusedReview = Invoke-FixtureScenario -Scenario 'focused-review' -Task 'Original request: update the board. Plan result: bounded edit. Run result: modified. changes_made: README.md. Modified files: README.md.' -ResourceProfile 'review_readonly' -Mode 'review'
+Add-Result 'focused-review-read-evidence-passes' (($focusedReview.exitCode -eq 0) -and ($focusedReview.result.status -eq 'success') -and ($focusedReview.result.resource_profile -eq 'review_readonly') -and ($focusedReview.result.resource_limits.maxTurns -eq 50) -and ($focusedReview.result.resource_limits.maxFilesRead -eq 40) -and ($focusedReview.result.observed_tools -contains 'Read') -and (@($focusedReview.result.commands_run).Count -eq 0)) "exit=$($focusedReview.exitCode) profile=$($focusedReview.result.resource_profile) tools=$($focusedReview.result.observed_tools -join ',')"
+
+$budgetExceeded = Invoke-FixtureScenario -Scenario 'budget-exceeded' -Task 'inspect the project until the provider hard budget is reached'
+$budgetAuditIssues = @($budgetExceeded.result.audit_issues)
+Add-Result 'budget-exceeded-is-classified' (($budgetExceeded.exitCode -eq 1) -and ($budgetExceeded.result.status -eq 'worker_failed') -and ($budgetExceeded.result.error.code -eq 'budget_exceeded') -and ($budgetExceeded.result.summary -match 'hard budget') -and ($budgetExceeded.result.blocked_on -contains 'budget_exceeded')) "exit=$($budgetExceeded.exitCode) error=$($budgetExceeded.result.error.code)"
+Add-Result 'budget-exceeded-is-not-audit-failure' (($budgetExceeded.result.error.code -ne 'audit_validation_failed') -and ($budgetAuditIssues -contains 'missing_required_field:summary')) "error=$($budgetExceeded.result.error.code) audit_issues=$($budgetAuditIssues -join ',')"
+
+$apiConnectionError = Invoke-FixtureScenario -Scenario 'api-connection-error' -Task 'exercise an upstream API connection failure'
+Add-Result 'upstream-error-message-is-preserved' (($apiConnectionError.exitCode -eq 1) -and ($apiConnectionError.result.error.code -eq 'worker_crash') -and ($apiConnectionError.result.error.message -eq 'API Error: Unable to connect to API (ConnectionRefused)')) "exit=$($apiConnectionError.exitCode) error=$($apiConnectionError.result.error.message)"
+
+$smallProfile = Invoke-FixtureScenario -Scenario 'complete-audit-json' -Task 'read one file with the default resource profile' -ResourceProfile 'small_readonly'
+Add-Result 'resource-profile-small-readonly-passes' (($smallProfile.exitCode -eq 0) -and ($smallProfile.result.resource_profile -eq 'small_readonly') -and ($smallProfile.result.resource_limits.maxBudgetUsd -eq 1) -and ($smallProfile.result.resource_limits.maxTurns -eq 30) -and ($smallProfile.result.resource_limits.maxFilesRead -eq 30) -and ($smallProfile.result.resource_limits.maxCommands -eq 1)) "exit=$($smallProfile.exitCode) profile=$($smallProfile.result.resource_profile) effectiveBudget=$($smallProfile.result.resource_limits.maxBudgetUsd) turns=$($smallProfile.result.resource_limits.maxTurns) maxFiles=$($smallProfile.result.resource_limits.maxFilesRead) maxCommands=$($smallProfile.result.resource_limits.maxCommands)"
+
+$smallOverRange = Invoke-FixtureScenario -Scenario 'many-reads' -Task 'inspect thirty-five related files' -ResourceProfile 'small_readonly'
+Add-Result 'resource-profile-small-readonly-enforces-range' (($smallOverRange.exitCode -eq 1) -and ($smallOverRange.result.error.code -eq 'audit_validation_failed') -and ($smallOverRange.result.error.message -match 'resource_limit_exceeded:maxFilesRead')) "exit=$($smallOverRange.exitCode) error=$($smallOverRange.result.error.message)"
+
+$explorationProfile = Invoke-FixtureScenario -Scenario 'many-reads' -Task 'explore thirty-five related project files' -ResourceProfile 'exploration_readonly'
+Add-Result 'resource-profile-exploration-readonly-allows-multifile-discovery' (($explorationProfile.exitCode -eq 0) -and ($explorationProfile.result.resource_profile -eq 'exploration_readonly') -and ($explorationProfile.result.resource_limits.maxBudgetUsd -eq 1.5) -and ($explorationProfile.result.resource_limits.maxTurns -eq 100) -and ($explorationProfile.result.resource_limits.maxFilesRead -eq 100) -and ($explorationProfile.result.resource_limits.maxCommands -eq 1) -and ($explorationProfile.result.resource_usage.filesRead -eq 35)) "exit=$($explorationProfile.exitCode) profile=$($explorationProfile.result.resource_profile) effectiveBudget=$($explorationProfile.result.resource_limits.maxBudgetUsd) used=$($explorationProfile.result.resource_usage.filesRead) max=$($explorationProfile.result.resource_limits.maxFilesRead)"
+
+$mediumProfile = Invoke-FixtureScenario -Scenario 'many-reads' -Task 'inspect thirty-five related files' -ResourceProfile 'medium_analysis'
+Add-Result 'resource-profile-medium-analysis-allows-larger-range' (($mediumProfile.exitCode -eq 0) -and ($mediumProfile.result.resource_profile -eq 'medium_analysis') -and ($mediumProfile.result.resource_limits.maxBudgetUsd -eq 2) -and ($mediumProfile.result.resource_limits.maxFilesRead -eq 100) -and ($mediumProfile.result.resource_usage.filesRead -eq 35)) "exit=$($mediumProfile.exitCode) profile=$($mediumProfile.result.resource_profile) budget=$($mediumProfile.result.resource_limits.maxBudgetUsd) used=$($mediumProfile.result.resource_usage.filesRead) max=$($mediumProfile.result.resource_limits.maxFilesRead)"
+
+$hardLimitRunId = New-TestRunId
+& powershell -NoProfile -ExecutionPolicy Bypass -File $script plan -Task 'must not start above hard budget' -ResourceProfile 'medium_analysis' -MaxBudgetUsd 5.01 -DryRun -RunId $hardLimitRunId *> $null
+$hardLimitExit = $LASTEXITCODE
+$hardLimitJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $hardLimitRunId -Json 2>&1 | Out-String
+$hardLimitResult = $hardLimitJson | ConvertFrom-Json
+Add-Result 'resource-profile-hard-limit-rejected' (($hardLimitExit -eq 3) -and ($hardLimitResult.status -eq 'invalid_input') -and ($hardLimitResult.error.message -match 'less than or equal to 5')) "exit=$hardLimitExit status=$($hardLimitResult.status) error=$($hardLimitResult.error.message)"
 
 $longSummary = Invoke-FixtureScenario -Scenario 'long-summary' -Task 'return a long strict JSON summary after inspecting files'
 Add-Result 'strict-long-summary-preserved' (($longSummary.exitCode -eq 0) -and ($longSummary.result.summary.Length -gt 300) -and $longSummary.result.summary.EndsWith('丙丁')) "exit=$($longSummary.exitCode) length=$($longSummary.result.summary.Length)"
@@ -132,22 +271,33 @@ Add-Result 'permission-denial-is-not-check-evidence' (($deniedCheck.exitCode -eq
 $failedCheck = Invoke-FixtureScenario -Scenario 'failed-tool-result' -Task 'claim a read whose tool result failed'
 Add-Result 'failed-tool-result-is-not-check-evidence' (($failedCheck.exitCode -eq 1) -and ($failedCheck.result.error.message -match 'file_audit_mismatch') -and ($failedCheck.result.permission_denials.Count -eq 0)) "exit=$($failedCheck.exitCode) denials=$($failedCheck.result.permission_denials.Count)"
 
+$capabilityMismatch = Invoke-FixtureScenario -Scenario 'tool-capability-mismatch' -Task 'record actual Worker tools when discovery tools are unavailable'
+Add-Result 'tool-capability-mismatch-is-diagnosable' (($capabilityMismatch.exitCode -eq 0) -and ($capabilityMismatch.result.capability_diagnostics.initObserved -eq $true) -and ($capabilityMismatch.result.capability_diagnostics.mismatch -eq $true) -and ($capabilityMismatch.result.capability_diagnostics.directoryDiscoveryAvailable -eq $false) -and ($capabilityMismatch.result.capability_diagnostics.missingAllowedTools -contains 'Glob')) "exit=$($capabilityMismatch.exitCode) missing=$(@($capabilityMismatch.result.capability_diagnostics.missingAllowedTools) -join ',')"
+
 $fileMismatch = Invoke-FixtureScenario -Scenario 'file-read-unreported-by-events' -Task 'claim a file read without an event'
 Add-Result 'reported-file-read-must-be-observed' (($fileMismatch.exitCode -eq 1) -and ($fileMismatch.result.error.message -match 'file_audit_mismatch')) "exit=$($fileMismatch.exitCode) error=$($fileMismatch.result.error.message)"
 
-try {
-    $previousPath = $env:PATH
-    $env:PATH = $fixtureDir + [System.IO.Path]::PathSeparator + $previousPath
-    $runAuditRunId = New-TestRunId
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $script run -Task 'write the requested fixture output' -ApprovedBy 'smoke-test' -ApprovalReason 'Verify run audit evidence enforcement.' -NoBare -RunId $runAuditRunId *> $null
-    $runAuditExit = $LASTEXITCODE
-} finally {
-    $env:PATH = $previousPath
-}
-$runAuditJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $runAuditRunId -Json 2>&1 | Out-String
-$runAuditError = $null
-try { $runAuditError = ($runAuditJson | ConvertFrom-Json).error.message } catch {}
-Add-Result 'run-requires-change-evidence' (($runAuditExit -eq 1) -and ($runAuditError -match 'missing_change_evidence')) "exit=$runAuditExit missing_change=$($runAuditError -match 'missing_change_evidence')"
+$runWithoutFinalRead = Invoke-FixtureScenario -Scenario 'run-write-without-final-read' -Task 'write the approved fixture file but omit the final Read event' -Mode 'run'
+Add-Result 'run-write-without-real-read-still-fails' (($runWithoutFinalRead.exitCode -eq 1) -and ($runWithoutFinalRead.result.status -eq 'worker_failed') -and ($runWithoutFinalRead.result.error.code -eq 'audit_validation_failed') -and ($runWithoutFinalRead.result.error.message -match 'file_audit_mismatch') -and ($runWithoutFinalRead.result.error.message -match 'reported_file_read_not_observed')) "exit=$($runWithoutFinalRead.exitCode) error=$($runWithoutFinalRead.result.error.message)"
+
+$runWithFinalRead = Invoke-FixtureScenario -Scenario 'run-write-with-final-read' -Task 'write the approved fixture file and verify it with a final Read event' -Mode 'run'
+Add-Result 'run-write-with-real-read-passes' (($runWithFinalRead.exitCode -eq 0) -and ($runWithFinalRead.result.status -eq 'success') -and (@($runWithFinalRead.result.audit_issues).Count -eq 0) -and ($runWithFinalRead.result.observed_tools -contains 'Write') -and ($runWithFinalRead.result.observed_tools -contains 'Read')) "exit=$($runWithFinalRead.exitCode) status=$($runWithFinalRead.result.status) tools=$($runWithFinalRead.result.observed_tools -join ',')"
+
+$runNoopWithEvidence = Invoke-FixtureScenario -Scenario 'run-noop-with-read-and-reason' -Task 'leave the approved target unchanged when its state is already correct' -Mode 'run'
+$runNoopReason = if ($runNoopWithEvidence.result.run_result -and $runNoopWithEvidence.result.run_result.PSObject.Properties['reason']) { [string]$runNoopWithEvidence.result.run_result.reason } else { '' }
+Add-Result 'run-noop-with-read-and-reason-passes' (($runNoopWithEvidence.exitCode -eq 0) -and ($runNoopWithEvidence.result.status -eq 'success') -and (@($runNoopWithEvidence.result.audit_issues).Count -eq 0) -and ($runNoopWithEvidence.result.run_result.type -eq 'noop') -and -not [string]::IsNullOrWhiteSpace($runNoopReason) -and ($runNoopWithEvidence.result.observed_tools -contains 'Read')) "exit=$($runNoopWithEvidence.exitCode) status=$($runNoopWithEvidence.result.status) reason=$runNoopReason"
+
+$runNoopWithoutEvidence = Invoke-FixtureScenario -Scenario 'run-noop-without-evidence' -Task 'claim no change is needed without inspecting the target' -Mode 'run'
+Add-Result 'run-noop-without-evidence-fails' (($runNoopWithoutEvidence.exitCode -eq 1) -and ($runNoopWithoutEvidence.result.status -eq 'worker_failed') -and ($runNoopWithoutEvidence.result.error.code -eq 'audit_validation_failed') -and ($runNoopWithoutEvidence.result.error.message -match 'missing_test_or_check_evidence') -and ($runNoopWithoutEvidence.result.error.message -match 'noop_contract_violation:missing_read_evidence')) "exit=$($runNoopWithoutEvidence.exitCode) error=$($runNoopWithoutEvidence.result.error.message)"
+
+$runNoopWithoutReason = Invoke-FixtureScenario -Scenario 'run-noop-without-reason' -Task 'claim no change is needed without explaining why' -Mode 'run'
+Add-Result 'run-noop-without-reason-fails' (($runNoopWithoutReason.exitCode -eq 1) -and ($runNoopWithoutReason.result.status -eq 'worker_failed') -and ($runNoopWithoutReason.result.error.message -match 'noop_contract_violation:missing_reason')) "exit=$($runNoopWithoutReason.exitCode) error=$($runNoopWithoutReason.result.error.message)"
+
+$runModifiedWithoutChanges = Invoke-FixtureScenario -Scenario 'run-modified-without-changes' -Task 'claim a modified result without reporting any changes' -Mode 'run'
+Add-Result 'run-modified-requires-change-evidence' (($runModifiedWithoutChanges.exitCode -eq 1) -and ($runModifiedWithoutChanges.result.error.message -match 'missing_change_evidence')) "exit=$($runModifiedWithoutChanges.exitCode) error=$($runModifiedWithoutChanges.result.error.message)"
+
+$prematureAudit = Invoke-FixtureScenario -Scenario 'premature-structured-output' -Task 'submit audit output before an approved edit' -Mode 'run'
+Add-Result 'structured-output-before-tools-is-rejected' (($prematureAudit.exitCode -eq 1) -and ($prematureAudit.result.error.code -eq 'premature_audit_output') -and ($prematureAudit.result.error.message -match 'tool_call_after_structured_output') -and ($prematureAudit.result.artifact_status -eq 'unvalidated_partial_artifacts_possible') -and ($prematureAudit.result.observed_tools -contains 'Edit')) "exit=$($prematureAudit.exitCode) error=$($prematureAudit.result.error.code) artifact=$($prematureAudit.result.artifact_status)"
 
 $summaryJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'summary.ps1') -RunId $mockRunId -Json 2>&1 | Out-String
 $normalizedFieldsOk = $false

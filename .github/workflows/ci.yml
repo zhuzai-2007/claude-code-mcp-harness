@@ -34,7 +34,17 @@ jobs:
           node --check .\mcp-server\server.mjs
           node --check .\mcp-server\smoke-client.mjs
           node --check .\mcp-server\side-effect-guard.mjs
-          node .\mcp-server\side-effect-guard.test.mjs
+      - name: Auto-discovered Node tests
+        shell: pwsh
+        run: .\scripts\run-node-tests.ps1
+      - name: Doctor nvm guidance
+        shell: pwsh
+        run: .\scripts\doctor-nvm.test.ps1
+      - name: Product startup check
+        shell: pwsh
+        run: |
+          .\scripts\init-config.ps1
+          .\start.ps1 -SkipDoctor -CheckOnly
       - name: MCP protocol smoke
         shell: pwsh
         run: .\scripts\test-mcp-protocol.ps1
@@ -44,6 +54,48 @@ jobs:
       - name: Documentation hygiene
         shell: pwsh
         run: .\scripts\scan-doc-hygiene.ps1
+      - name: Release baseline
+        shell: pwsh
+        run: .\scripts\check-release-baseline.ps1
       - name: Skill harness verification
         shell: pwsh
         run: .\skills\codex-claude-worker\scripts\verify-harness.ps1 -ProjectRoot . -MockWorker
+
+  clean-onboarding:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Prepare isolated Claude CLI presence check
+        shell: pwsh
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP "supervisor-claude-shim"
+          New-Item -ItemType Directory -Force $shim | Out-Null
+          Set-Content -LiteralPath (Join-Path $shim "claude.cmd") -Value "@echo off`necho claude-ci-shim"
+          $shim | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Verify clean checkout inputs
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath .\.agents\projects.local.json) { throw "Clean checkout must not contain projects.local.json." }
+          if (Test-Path -LiteralPath .\runtime-data) { throw "Clean checkout must not contain runtime-data." }
+          .\scripts\verify-release-projects.ps1
+      - name: Clean clone install
+        shell: pwsh
+        run: .\install.ps1
+      - name: Clean clone doctor
+        shell: pwsh
+        run: |
+          $result = .\scripts\doctor.ps1 -Json | ConvertFrom-Json
+          if (-not $result.ok) { throw "Doctor reported required setup errors." }
+      - name: Clean clone startup check
+        shell: pwsh
+        run: .\start.ps1 -CheckOnly
+      - name: Verify onboarding leaves no release drift
+        shell: pwsh
+        run: |
+          $dirty = @(git status --porcelain --untracked-files=all)
+          if ($dirty.Count) { throw "Onboarding created Git-visible files: $($dirty -join ', ')" }
+          $trackedRuntime = @(git ls-files -- runtime-data .agents/projects.local.json)
+          if ($trackedRuntime.Count) { throw "Runtime/local paths are tracked: $($trackedRuntime -join ', ')" }

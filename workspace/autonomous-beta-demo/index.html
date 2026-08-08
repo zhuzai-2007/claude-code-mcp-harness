@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Autonomous Beta Demo</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">Supervisor v0.9 validation target</p>
+        <h1>发布检查清单</h1>
+        <p class="lede">一个隔离、无依赖的静态 Demo，用于验证完整 Workflow。</p>
+      </header>
+
+      <section class="toolbar" aria-label="任务筛选">
+        <label for="status-filter">状态</label>
+        <select id="status-filter">
+          <option value="all">全部</option>
+          <option value="open">未完成</option>
+          <option value="complete">已完成</option>
+        </select>
+        <label for="keyword-search">关键词</label>
+        <input type="search" id="keyword-search" placeholder="搜索标题或领域…">
+      </section>
+
+      <section class="summary" aria-live="polite">
+        <strong id="visible-count">0</strong> 项可见
+        <span>·</span>
+        <strong id="complete-count">0</strong> 项已完成
+      </section>
+
+      <ul id="checklist" class="checklist" aria-label="发布检查项"></ul>
+      <p id="empty-state" class="empty" hidden>当前筛选条件下没有检查项。</p>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
