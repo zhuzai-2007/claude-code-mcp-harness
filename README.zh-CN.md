@@ -63,6 +63,79 @@ Supervisor 是一个**为编码 Agent 提供审批、审计、项目连续性和
 
 Dashboard 是查看状态、证据和执行审批的控制台，不替代 ChatGPT 的负责人判断。完整的新会话步骤与非自动发布验收见 [ChatGPT Web 使用指南](docs/gpt-web-usage.md)。
 
+## 首次使用完整闭环
+
+上面的快速开始只能证明本地进程已经启动。本节从 OpenAI Platform 配置开始，一直走到完成变更、由 ChatGPT 复核，以及可选的 Project Memory 更新。
+
+### 1. 创建 Tunnel 和 Runtime Key
+
+在准备使用的 Platform Organization 下打开 [OpenAI Platform Tunnel 设置](https://platform.openai.com/settings/organization/tunnels)。
+
+1. 确认当前 Platform 角色具有 **Tunnels Read + Manage**。创建一个易于识别的 Tunnel，并关联实际使用它的 ChatGPT Workspace，保存返回的 `tunnel_id`。
+2. 打开 [Platform API Keys](https://platform.openai.com/settings/organization/api-keys)，为 `tunnel-client` 单独创建一个 **Restricted** Runtime Key，只授予 **Tunnels Read + Use**。不要把 Admin Key 用作长期运行密钥。
+3. 从 Tunnel 设置页或 [OpenAI 官方发布页](https://github.com/openai/tunnel-client/releases/latest) 下载当前版 `tunnel-client`，加入 `PATH` 后验证：
+
+   ```powershell
+   tunnel-client help quickstart
+   ```
+
+4. 只在运行 Tunnel 的 PowerShell 窗口中设置密钥，然后初始化本仓库使用的 HTTP Profile：
+
+   ```powershell
+   $env:CONTROL_PLANE_API_KEY="<tunnel-runtime-key>"
+   .\scripts\start-openai-tunnel.ps1 `
+     -Initialize `
+     -TunnelId "<tunnel-id>" `
+     -DoctorOnly
+   ```
+
+Tunnel Key、Tunnel ID、Profile、代理设置和端点都属于本地运行配置。不要把它们写入 `config.json`、README、Issue 或 Git Commit。
+
+### 2. 在 ChatGPT Web 创建 App
+
+OpenAI 当前通过 Developer Mode Custom App 提供这一入口；Beta 期间界面可能使用 **Apps**、**Plugins** 或 **Connectors** 等名称。
+
+1. 先确认 ChatGPT 套餐/Workspace 支持需要的操作。完整 MCP 写操作目前要求受支持的 Business 或 Enterprise/Edu Workspace；其他套餐可能仅支持只读，或尚不可用。
+2. 启用 Developer Mode。Business 管理员/所有者可以进入 **Settings → Apps → Advanced settings → Developer mode**，也可以从 **Workspace settings → Apps → Create** 进入；Enterprise/Edu 用户可能需要管理员先通过 RBAC 授权。
+3. 选择 **Create**，填写清晰的名称，例如 `Local Supervisor`，Connection 选择 **Tunnel**。
+4. 选择刚才创建的 Tunnel；如果暂时没有出现在列表中，就粘贴 `tunnel_id`。不要把本地 `127.0.0.1` Bridge 地址粘贴到 ChatGPT。
+5. 选择 **Scan Tools**，等待扫描完成后创建 Draft App。确认至少可以看到 `cc_list_projects`、`cc_list_workflow_definitions`、`cc_create_workflow`、`cc_get_workflow` 和 `cc_get_supervisor_review_package`。
+
+OpenAI 会保存经过审核的工具快照，不会自动接受后续工具变化。本 Beta 建议每次开始本地使用时都遵循以下顺序：
+
+```text
+start.ps1 -> start-openai-tunnel.ps1 -> Tunnel ready
+-> ChatGPT App 设置：Refresh / Scan Tools -> 新建 ChatGPT 会话
+```
+
+工具定义发生变化后必须刷新；本地重启后如果工具不可见或调用异常，也应首先刷新。如果所在 Workspace 不允许更新已经发布的 App，请按照 Workspace 策略重新创建并发布。
+
+### 3. 完整跑一次 Demo
+
+1. 运行 `start.ps1`，打开它打印的 Dashboard 地址，选择 **New Project**，创建 `My First Demo`。Supervisor 只会在 `workspace/` 下创建受管目录，不会扫描或导入任意目录。
+2. 启动 `tunnel-client`，确认 `.\scripts\start-openai-tunnel.ps1 -ReadyOnly` 成功，刷新 ChatGPT App，并用已启用该 App 的新会话开始。
+3. 输入一次普通需求，不需要提供路径、Resource Profile、Worker Prompt 或审计 JSON：
+
+   > 请在已注册的 Project“My First Demo”中创建一个不依赖框架的 HTML/CSS/JavaScript 页面，显示“Hello Supervisor”。请先规划，等我在 Dashboard 审批后再修改。
+
+4. ChatGPT 应先发现已注册 Project，读取目标 Project Context 和 Continuity，查询合法 Workflow Definition，解释判断并创建 Workflow。它不能替用户批准 Workflow。
+5. 回到 Dashboard，展开 **My First Demo**，打开新 Workflow，检查 Planner 结果、预计文件范围、风险、Resource Profile 和资源上限。填写审批人和审批理由，再选择 **Approve**；计划或边界不正确时应选择 Reject。
+6. 保持 Runtime 和 Tunnel 运行。Workflow 会依次进入 Coder 和 Reviewer。即使 ChatGPT 页面断开，也可以通过顶部 Stage Timeline 查看 Planning、Approval、Implementation 和 Review。
+7. Workflow 进入 **Completed** 或 **Failed** 后，选择 **Review in ChatGPT**，复制生成的交接提示，粘贴回已连接的 ChatGPT 会话。ChatGPT 会调用 `cc_get_supervisor_review_package`，依据原始目标、Observed Changes、检查、风险和 Claude Reviewer 结果进行负责人复核。
+8. 如果认可复核结果，明确要求 ChatGPT 保存本次 Supervisor Review。Project Memory Proposal 此时仍只是建议；在 Dashboard 中检查它，仅当你确认内容正确时才选择 **Confirm and apply**，将基于证据的条目追加到 `PROJECT_MEMORY.md`。
+
+第 7-8 步不会自动改变 Workflow 状态、批准代码或修改 Project Memory。保存 Review 和应用 Memory 都需要明确确认。
+
+### 4. Dashboard 日常使用技巧
+
+- **Project：** Project 是主导航单位。通过 `...` 菜单可以重命名受管 Project、置顶/取消置顶或归档。已置顶的活动 Project 优先显示；存在活动 Workflow 时不能重命名或归档；已归档 Project 不能创建新 Workflow。
+- **恢复 Project：** 展开 **Archived Projects** 后选择 **Restore**。归档会保留 Project、Workflow 和审计证据，不会删除 Workspace 目录。
+- **Workflow 会话：** Workflow 在所属 Project 内纵向排列。通过会话 `...` 菜单可以修改显示名称，或归档已经结束的 Workflow。归档会话保留在 Project 内折叠的 **Archived** 分组和 **Global Archived Workflows** 中；重新打开菜单并取消 **Archive session** 即可恢复。v1.10 不支持单独置顶会话。
+- **Project Session：** Runtime Session 用于跨 Workflow 延续决策、未决问题和下一步行动，不是 ChatGPT 聊天记录的副本。
+- **备用本地入口：** 展开 **Local fallback entry**，选择一个活动 Project，输入需求并创建 Workflow。该入口使用确定性的本地规则，不具备 GPT 的负责人判断，但仍然进入正常 Planner，也不能绕过人工审批。
+- **历史与刷新：** Project 展开状态、归档区域显示状态、语言和主题只是 Dashboard 本地偏好。Dashboard 的刷新按钮用于同步 Runtime 状态；ChatGPT App 的 **Refresh / Scan Tools** 用于更新 MCP Action 元数据。
+- **失败与重试：** 重试前先查看失败阶段和错误分类。Recovery 会创建新的 Workflow、Planner 结果和审批点，不会复用旧审批。
+
 ## 主要能力
 
 - 在本地 Supervisor Console 中创建和观察开发任务；

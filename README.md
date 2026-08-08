@@ -63,6 +63,79 @@ Starting with only Git and Claude Code? Follow [Getting started from zero on Win
 
 The Dashboard is the control console for state, evidence, and approval; it is not a replacement for ChatGPT reasoning. See [Using Supervisor from ChatGPT Web](docs/gpt-web-usage.md) for the exact first-session sequence and non-automated release validation.
 
+## Complete first-run workflow
+
+The short quick start above proves that the local processes launch. This section closes the full loop from OpenAI Platform setup to a reviewed change and an optional Project Memory update.
+
+### 1. Create the Tunnel and its runtime key
+
+Open [OpenAI Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels) in the Platform organization you intend to use.
+
+1. Make sure your Platform role has **Tunnels Read + Manage** to create the Tunnel. Create a Tunnel, give it a recognizable name, and associate it with the ChatGPT workspace that will use it. Save the returned `tunnel_id`.
+2. Open [Platform API keys](https://platform.openai.com/settings/organization/api-keys) and create a separate **Restricted** runtime key for `tunnel-client`. Grant it only **Tunnels Read + Use**. Do not use an admin key for the long-running client.
+3. Download the current `tunnel-client` from the Tunnel settings page or the [official OpenAI release page](https://github.com/openai/tunnel-client/releases/latest), put it on `PATH`, and verify it:
+
+   ```powershell
+   tunnel-client help quickstart
+   ```
+
+4. In the PowerShell window that will run the Tunnel, set the key for that process only, then initialize this repository's HTTP profile:
+
+   ```powershell
+   $env:CONTROL_PLANE_API_KEY="<tunnel-runtime-key>"
+   .\scripts\start-openai-tunnel.ps1 `
+     -Initialize `
+     -TunnelId "<tunnel-id>" `
+     -DoctorOnly
+   ```
+
+The Tunnel key, Tunnel id, profile, proxy settings, and endpoint are local operator secrets. Do not put them in `config.json`, a README, an issue, or a Git commit.
+
+### 2. Create the ChatGPT app
+
+OpenAI currently exposes this through a developer-mode custom app; the UI may use **Apps**, **Plugins**, or **Connectors** while the beta evolves.
+
+1. Confirm that your ChatGPT plan/workspace supports the actions you need. Full MCP write actions currently require a supported Business or Enterprise/Edu workspace; other plans may be read-only or unavailable.
+2. Enable developer mode. For a Business admin/owner, use **Settings → Apps → Advanced settings → Developer mode** or **Workspace settings → Apps → Create**. Enterprise/Edu access may first require workspace RBAC permission.
+3. Choose **Create**, set a clear name such as `Local Supervisor`, and choose **Tunnel** for the connection.
+4. Select the Tunnel created above, or paste its `tunnel_id` if it is not yet listed. Do not paste the private `127.0.0.1` Bridge URL into ChatGPT.
+5. Choose **Scan Tools**, wait for discovery to finish, and create the draft app. Check that tools such as `cc_list_projects`, `cc_list_workflow_definitions`, `cc_create_workflow`, `cc_get_workflow`, and `cc_get_supervisor_review_package` are visible.
+
+OpenAI keeps a reviewed snapshot of an app's tools rather than automatically accepting later tool changes. For this beta, use this startup order every time you begin a local session:
+
+```text
+start.ps1 -> start-openai-tunnel.ps1 -> Tunnel ready
+-> ChatGPT App settings: Refresh / Scan Tools -> new ChatGPT conversation
+```
+
+Refreshing is essential after tool definitions change and is also the recommended first troubleshooting step after a local restart. If your workspace does not allow an already published app to be updated, recreate and republish it according to your workspace policy.
+
+### 3. Run one complete demo
+
+1. Start `start.ps1`, open the printed Dashboard URL, and choose **New Project**. Create `My First Demo`. Supervisor creates a managed directory directly under `workspace/`; it does not import or scan arbitrary directories.
+2. Start `tunnel-client`, confirm `.\scripts\start-openai-tunnel.ps1 -ReadyOnly` succeeds, refresh the ChatGPT app, and open a new conversation with that app enabled.
+3. Send one ordinary request. You do not need to provide a path, Resource Profile, Worker prompt, or audit JSON:
+
+   > In the registered Project "My First Demo", create a dependency-free HTML/CSS/JavaScript page that displays "Hello Supervisor". Plan it first and wait for my approval in the Dashboard before making changes.
+
+4. ChatGPT should discover the registered Projects, read the selected Project Context and Continuity, list legal Workflow Definitions, explain its decision, and create the Workflow. It must not approve the Workflow for you.
+5. Return to the Dashboard. Expand **My First Demo**, open the new Workflow, inspect the Planner result, expected file scope, risks, Resource Profile, and estimated limit. Enter your name and approval reason, then choose **Approve**. Reject it instead if the plan or boundary is wrong.
+6. Keep the local Runtime and Tunnel running. The Workflow advances through Coder and Reviewer. Use the stage timeline to inspect Planning, Approval, Implementation, and Review without depending on the ChatGPT tab staying connected.
+7. When the Workflow reaches **Completed** or **Failed**, choose **Review in ChatGPT**, copy the generated handoff, and paste it into the connected ChatGPT conversation. ChatGPT calls `cc_get_supervisor_review_package` and compares the original goal with observed changes, checks, risks, and the Claude Reviewer result.
+8. If you accept the review, explicitly ask ChatGPT to save the Supervisor Review. A Project Memory proposal is still only a proposal. Inspect it in the Dashboard and choose **Confirm and apply** only when you want the evidence-based entry appended to `PROJECT_MEMORY.md`.
+
+Nothing in steps 7-8 automatically changes Workflow state, approves code, or edits Project Memory. Review persistence and Memory application each require explicit confirmation.
+
+### 4. Daily Dashboard tips
+
+- **Projects:** Projects are the main navigation unit. Use the `...` menu to rename a managed Project, pin/unpin it, or archive it. Pinned active Projects sort first. A Project with an active Workflow cannot be renamed or archived, and an archived Project cannot create new Workflows.
+- **Restore a Project:** Expand **Archived Projects** and choose **Restore**. Archiving preserves the Project, Workflows, and evidence; it does not delete the workspace directory.
+- **Workflow sessions:** Workflows are displayed vertically inside their Project. Use the session `...` menu to set a display name or archive a terminal Workflow. Archived sessions remain under the collapsed **Archived** group inside the Project and in **Global Archived Workflows**; reopen the menu and clear **Archive session** to restore one. Individual session pinning is not part of v1.10.
+- **Project Sessions:** Runtime Project Sessions carry decisions, unresolved questions, and next actions across Workflows. They are continuity records, not copies of ChatGPT conversations.
+- **Local fallback entry:** Expand **Local fallback entry**, choose an active Project, enter the request, and create a Workflow when ChatGPT is unavailable. This route uses deterministic local rules rather than GPT reasoning, but it still creates the normal Planner and cannot bypass human approval.
+- **History and refresh:** Project expansion, archived-section visibility, language, and theme are stored only as local Dashboard preferences. Use the Dashboard refresh button for current Runtime state; use ChatGPT's App **Refresh / Scan Tools** for MCP action metadata.
+- **Failures:** Read the failed stage and classification before retrying. Recovery creates a new Workflow, a new Planner result, and a new approval checkpoint; it never reuses an old approval.
+
 ## What you get
 
 - A local Supervisor Console for creating and following development requests.
