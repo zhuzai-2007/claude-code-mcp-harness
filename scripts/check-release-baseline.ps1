@@ -82,7 +82,7 @@ $invalidProjects = @($registry.projects | Where-Object { [string]::IsNullOrWhite
 Add-Check "Project context schema" ([int]$registry.schemaVersion -ge 3 -and $invalidProjects.Count -eq 0) $(if ($invalidProjects.Count) { "Projects missing projectId, workspacePath, description, stack, aliases, or constraints: $($invalidProjects.projectId -join ', ')" } else { "$(@($registry.projects).Count) registered projects satisfy schema v$($registry.schemaVersion)." })
 
 $readme = Get-Content -LiteralPath (Join-Path $repoRoot "README.md") -Raw -Encoding UTF8
-$flowMarkers = @("Five-minute quick start", "Clone the repository", ".\install.ps1", ".\scripts\doctor.ps1", "-ProviderPreflight", ".\start.ps1", "start-openai-tunnel.ps1", "cc_list_projects", "cc_list_workflow_definitions", "Add CSV export to the demo task board", "/supervisor/", "Create recovery workflow", "v0.9 autonomous validation", "autonomous-beta-demo", "v1.0-beta release audit")
+$flowMarkers = @("Five-minute quick start", "Clone the repository", ".\install.ps1", ".\scripts\doctor.ps1", "-ProviderPreflight", ".\start.ps1", "start-openai-tunnel.ps1", "cc_list_projects", "cc_list_workflow_definitions", "registered Project", "projectId", "Human Approval", "Harness Audit", "ChatGPT Supervisor Review", "Release Beta Todo Demo", "add CSV export to the task board", "/supervisor/", "Create recovery workflow", "v0.9 autonomous validation", "autonomous-beta-demo", "v1.0-beta release audit")
 $missingFlow = @($flowMarkers | Where-Object { -not $readme.Contains($_) })
 Add-Check "Operator quick start" ($missingFlow.Count -eq 0) $(if ($missingFlow.Count) { "README is missing: $($missingFlow -join ', ')" } else { "README documents clone/install/doctor/start/Dashboard usage." })
 
