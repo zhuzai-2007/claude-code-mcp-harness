@@ -16,6 +16,14 @@ function Add-Check([string] $Name, [bool] $Ok, [string] $Detail) {
     [void]$checks.Add([pscustomobject]@{ name = $Name; ok = $Ok; detail = $Detail })
 }
 
+function Test-GitIgnored([string] $Path) {
+    & git -C $repoRoot check-ignore -q -- $Path
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) { return $true }
+    if ($exitCode -eq 1) { return $false }
+    throw "git check-ignore failed for '$Path' with exit code $exitCode."
+}
+
 if (-not (Test-Path -LiteralPath $registryPath -PathType Leaf)) {
     throw "Release project registry is missing: $registryPath"
 }
@@ -58,8 +66,7 @@ foreach ($project in @($registry.projects)) {
             $prefix = "$gitPath/"
             $trackedProjectFiles = @($tracked | Where-Object { $_.Replace("\", "/").StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) })
             if ($trackedProjectFiles.Count -eq 0) { $projectErrors.Add("Release Project '$projectId' has no tracked files: $configuredPath") }
-            & git -C $repoRoot check-ignore -q -- $gitPath
-            if ($LASTEXITCODE -eq 0) { $projectErrors.Add("Release Project '$projectId' is ignored by Git: $configuredPath") }
+            if (Test-GitIgnored $gitPath) { $projectErrors.Add("Release Project '$projectId' is ignored by Git: $configuredPath") }
         }
     } catch {
         $projectErrors.Add("Release Project '$projectId' has an invalid path: $($_.Exception.Message)")
@@ -71,13 +78,11 @@ $forbiddenTracked = @($tracked | Where-Object { $_ -eq ".agents/projects.local.j
 Add-Check "Runtime/local registry hygiene" ($forbiddenTracked.Count -eq 0) $(if ($forbiddenTracked.Count) { "Forbidden tracked paths: $($forbiddenTracked -join ', ')" } else { "Local registry and runtime-data are not tracked." })
 
 $exampleGitPath = ".agents/projects.local.example.json"
-& git -C $repoRoot check-ignore -q -- $exampleGitPath
-$exampleIgnored = $LASTEXITCODE -eq 0
+$exampleIgnored = Test-GitIgnored $exampleGitPath
 Add-Check "Local registry example" ((Test-Path -LiteralPath $localExamplePath -PathType Leaf) -and -not $exampleIgnored) $(if (-not (Test-Path -LiteralPath $localExamplePath -PathType Leaf)) { "Missing $exampleGitPath." } elseif ($exampleIgnored) { "$exampleGitPath is ignored." } else { "$exampleGitPath is release-visible." })
 
 if (Test-Path -LiteralPath $localRegistryPath -PathType Leaf) {
-    & git -C $repoRoot check-ignore -q -- ".agents/projects.local.json"
-    $localIgnored = $LASTEXITCODE -eq 0
+    $localIgnored = Test-GitIgnored ".agents/projects.local.json"
     Add-Check "Optional local registry" $localIgnored $(if ($localIgnored) { ".agents/projects.local.json is present and ignored." } else { ".agents/projects.local.json must be ignored." })
 } else {
     Add-Check "Optional local registry" $true ".agents/projects.local.json is absent, which is supported."
@@ -94,3 +99,4 @@ if ($Json) {
     }
 }
 if (-not $ok) { exit 1 }
+exit 0
