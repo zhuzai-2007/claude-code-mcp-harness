@@ -1,5 +1,7 @@
 # Supervisor Brain v1.7 Project Continuity Layer
 
+[English](supervisor-brain.md) | [简体中文](supervisor-brain.zh-CN.md)
+
 Supervisor Brain is the responsibility layer above Workflow planning. It does not execute a Worker, create a Task directly, approve work, or weaken any Harness contract.
 
 After execution, the read-only Supervisor Review Package projects the original request, frozen Decision-time Project Memory, implementation evidence, and Reviewer result into one persisted artifact for a later ChatGPT Web review. An explicitly confirmed GPT judgment can return as an additive Supervisor Review Result. A separate explicit confirmation can apply the evidence-first Memory Proposal through the Runtime-controlled append contract. Historical v1.4 reliability analysis remains in [Supervisor v1.4 Reliability and Review Foundation](supervisor-reliability-review.md).
@@ -108,7 +110,7 @@ Intent/Workflow mismatches are rejected locally. A `conversation` Decision canno
 
 ## Project registry
 
-`.agents/projects.json` contains release-safe Projects. For machine-local Projects, copy `.agents/projects.local.example.json` to ignored `.agents/projects.local.json`; do not add personal paths to the release registry. Runtime loads release definitions, local definitions, then its persisted metadata overlay. Schema v3 uses `projectId`, `name`, `workspacePath`, `aliases`, `stack`, and `constraints`; the Registry still accepts the earlier `id/path/techStack/defaultConstraints` names. Release/local `projectId` collisions are rejected. Local paths must be relative and resolve inside `workspace/`; all Registry paths are resolved and frozen in each new Decision and Workflow. Missing directories and paths that escape the allowed root are rejected.
+`.agents/projects.json` contains release-safe Projects. For machine-local Projects, copy `.agents/projects.local.example.json` to ignored `.agents/projects.local.json`; do not add personal paths to the release registry. Runtime loads release definitions, local definitions, then its persisted metadata overlay. Schema v3 uses `projectId`, `name`, `workspacePath`, `aliases`, `stack`, and `constraints`; the Registry still accepts the earlier `id/path/techStack/defaultConstraints` names. Release/local `projectId` collisions are rejected. Local paths must be relative and resolve inside `workspace/`; Dashboard-created managed Projects must be direct children of `workspace/`. The checked-in release Registry may define trusted system Projects such as the repository root. This does not permit ChatGPT to construct a path: it must discover a registered `projectId`, and the Registry resolves and freezes `workspacePath` in each new Decision and Workflow. Missing directories and paths that escape the allowed root are rejected.
 
 Selection order is:
 

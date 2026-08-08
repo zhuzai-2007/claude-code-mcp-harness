@@ -1,5 +1,7 @@
 # Getting started from zero on Windows
 
+[English](getting-started-from-zero.md) | [简体中文](getting-started-from-zero.zh-CN.md)
+
 This guide starts with a Windows machine that has Git and Claude Code, but no Node.js or local Supervisor configuration. It ends with a first Project-bound Workflow created from ChatGPT Web.
 
 Supervisor is local-first: the Bridge, Dashboard, project files, execution evidence, and approval checkpoint remain on this computer. OpenAI Secure MCP Tunnel is an outbound transport that lets supported ChatGPT workspaces reach the local MCP Bridge without publishing the Bridge directly on the internet.
@@ -142,6 +144,8 @@ ChatGPT settings and plan availability can change, so use the current official d
 4. select the Tunnel associated with this workspace;
 5. scan tools and create the draft app.
 
+Before asking for work, create or identify the target Project. Dashboard-created managed Projects are direct children of this repository's `workspace/` directory. Treat a Project name or `workspace/` directory name as a discovery hint only: ChatGPT must resolve it through `cc_list_projects` to an exact registered `projectId`; the Runtime Registry then supplies `workspacePath`. Do not give ChatGPT an arbitrary absolute path and ask it to construct or trust `workspacePath`.
+
 Confirm at least these Supervisor tools appear:
 
 - `cc_ping`
@@ -155,7 +159,7 @@ Confirm at least these Supervisor tools appear:
 
 Start a new chat with the draft app enabled and ask:
 
-> List the registered Projects and supported Workflow Definitions. Then prepare a Workflow to add CSV export to the release demo. Do not start a write-capable stage without explicit human approval.
+> List the registered Projects and supported Workflow Definitions. Resolve the registered Project "Release Beta Todo Demo" to its exact `projectId`, read its Project Context and Continuity, then prepare a Workflow to add CSV export. Do not guess `workspacePath` or start a write-capable stage without explicit human approval.
 
 Real Planner, Coder, and Reviewer stages call the configured model provider and may incur provider charges. Resource Profiles enforce local safety limits, but their estimates are not a billing guarantee.
 
@@ -172,7 +176,7 @@ Project discovery
   -> Supervisor Review Package
 ```
 
-The user should not need to provide a filesystem path, Resource Profile, Worker prompt, or audit JSON schema.
+The user should name the target registered Project but should not need to provide a filesystem path, Resource Profile, Worker prompt, or audit JSON schema.
 
 ## 7. Stop safely
 

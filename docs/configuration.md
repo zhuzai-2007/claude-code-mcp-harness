@@ -1,5 +1,7 @@
 # Configuration and secrets
 
+[English](configuration.md) | [简体中文](configuration.zh-CN.md)
+
 Supervisor keeps versioned policy separate from machine-local runtime settings and credentials.
 
 ## Public, versioned configuration
@@ -59,6 +61,8 @@ Project definitions load in this order:
 3. Dashboard-created definitions and metadata overrides from ignored runtime data.
 
 Copy `.agents/projects.local.example.json` to `.agents/projects.local.json` only when a private workspace Project is needed. Local entries cannot use absolute paths and must resolve inside this repository's `workspace/` directory. A `projectId` duplicated across release and local registries is a startup error. Missing local registry is valid. Runtime metadata for a removed local definition is ignored with a diagnostic rather than being promoted into an incomplete Project.
+
+Projects created through the Dashboard are managed direct children of `workspace/`; callers cannot supply or change their `path` or `workspacePath`. The checked-in release Registry may also define trusted system Projects such as the repository root. That release-only exception does not let a user or ChatGPT register an arbitrary path: ChatGPT must discover a registered `projectId`, and the Runtime Registry owns the resolved `workspacePath`.
 
 Every definition requires a stable `projectId`, relative `workspacePath`, `description`, `stack`, `aliases`, and `constraints`. Alias matching helps the Supervisor choose a unique project; it is not permission to explore sibling directories. Runtime-derived usage and Dashboard metadata remain ignored rather than rewriting the public registry.
 

@@ -1,5 +1,7 @@
 # Using Supervisor from ChatGPT Web
 
+[English](gpt-web-usage.md) | [简体中文](gpt-web-usage.zh-CN.md)
+
 Supervisor separates project leadership from local execution. ChatGPT is the Supervisor, Claude Code is a bounded Worker, and the Dashboard is the human control console.
 
 | Surface | Responsibility | It does not do |
@@ -9,6 +11,14 @@ Supervisor separates project leadership from local execution. ChatGPT is the Sup
 | Supervisor Dashboard | Show Projects, Workflows, stages, evidence, cost, failures, and approval controls. | Replace ChatGPT reasoning or call a GPT API. |
 
 The Dashboard's **Local fallback entry** is a deterministic backup. The primary natural-language entry is ChatGPT Supervisor.
+
+## Identify the target Project
+
+Tell ChatGPT which registered Project should receive the work. A Project name—and, when useful, its directory name under `workspace/`—is a location hint. It is not permission to construct a path. For example:
+
+> I want to complete this task in the registered Project "My First Demo". It is the My First Demo project under `workspace/`. First confirm its `projectId`, read Project Context, and then plan. Do not guess or construct `workspacePath`.
+
+Dashboard-created managed Projects are direct children of the repository's `workspace/` directory. Local Registry entries must use repository-relative paths inside `workspace/`. ChatGPT must use Project discovery and pass an exact registered `projectId`; the Runtime Registry owns the `projectId` to `workspacePath` mapping. Never ask ChatGPT to scan an unregistered directory or treat an arbitrary absolute path as a Project.
 
 ## Connect a new ChatGPT session
 
@@ -28,9 +38,9 @@ This sequence proves continuity without giving the Runtime access to ChatGPT con
 
 ## Minimal first task
 
-Use a registered demo project and enter only:
+Use a registered demo Project and identify it explicitly:
 
-> Add CSV export to the demo task board.
+> In the registered Project "Release Beta Todo Demo", add CSV export to the task board. Resolve its exact `projectId` before planning.
 
 Expected product flow:
 
@@ -45,7 +55,7 @@ Supervisor Decision
   -> ChatGPT Supervisor Review
 ```
 
-The user should not need to provide a Resource Profile, filesystem path, Worker prompt, or audit schema. ChatGPT discovers projects and Workflow Definitions through MCP; the Runtime supplies safe defaults.
+The user should name the registered Project but should not need to provide a Resource Profile, filesystem path, Worker prompt, or audit schema. ChatGPT discovers Projects and Workflow Definitions through MCP; the Runtime supplies the registered path and safe defaults.
 
 ## End-to-end release validation
 

@@ -24,6 +24,8 @@ Requirements: Windows PowerShell, Node.js 20+, Claude Code CLI with a configured
 
 Starting with only Git and Claude Code? Follow [Getting started from zero on Windows](docs/getting-started-from-zero.md). ChatGPT plan and workspace support for custom MCP and write actions changes independently of this project, so verify current availability before installing.
 
+> **Project location:** Supervisor v1.10 operates on registered Projects. Dashboard-managed Projects are created under this repository's `workspace/` directory. When asking ChatGPT to do work, name the target Project; ChatGPT should resolve it to a registered `projectId` through Project discovery instead of guessing a local path or constructing `workspacePath`.
+
 1. **Install dependencies.** Clone the repository, open PowerShell in its root, and run:
 
    ```powershell
@@ -46,13 +48,13 @@ Starting with only Git and Claude Code? Follow [Getting started from zero on Win
    .\scripts\start-openai-tunnel.ps1
    ```
 
-   Some command-line network environments require `HTTP_PROXY` and `HTTPS_PROXY`; see [Network and proxy configuration](#network-and-proxy-configuration). Never commit the tunnel profile, API key, proxy address, or public endpoint.
+   Some command-line network environments require `HTTP_PROXY` and `HTTPS_PROXY`; see [Secure MCP Tunnel proxy setup](docs/secure-mcp-tunnel.md#initialize-and-run-tunnel-client). Never commit the tunnel profile, API key, proxy address, or public endpoint.
 
-4. **Connect ChatGPT.** Add the tunnel endpoint as an MCP connection in ChatGPT Web. Ask ChatGPT Supervisor to call `cc_list_projects`, `cc_get_project_continuity`, and `cc_list_workflow_definitions` before creating work.
+4. **Connect ChatGPT.** Add the tunnel endpoint as an MCP connection in ChatGPT Web. Ask ChatGPT Supervisor to call `cc_list_projects`, `cc_get_project_context`, `cc_get_project_continuity`, and `cc_list_workflow_definitions` before creating work.
 
-5. **Run the first task.** Against a registered demo Project, enter only:
+5. **Run the first task.** Identify the registered Project in the request:
 
-   > Add CSV export to the demo task board.
+   > In the registered Project "Release Beta Todo Demo", add CSV export to the task board. Resolve its exact `projectId` before planning.
 
    The expected path is:
 
@@ -111,6 +113,14 @@ start.ps1 -> start-openai-tunnel.ps1 -> Tunnel ready
 Refreshing is essential after tool definitions change and is also the recommended first troubleshooting step after a local restart. If your workspace does not allow an already published app to be updated, recreate and republish it according to your workspace policy.
 
 ### 3. Run one complete demo
+
+The Project name or directory you give ChatGPT is a location hint, not an execution path. ChatGPT Supervisor must call `cc_list_projects`, resolve one exact registered `projectId`, then call `cc_get_project_context`, `cc_get_project_continuity`, and `cc_list_workflow_definitions` before it creates the Workflow. The Runtime Registry—not GPT—maps that `projectId` to `workspacePath`.
+
+Use a request that identifies the registered Project explicitly. For example:
+
+> I want to complete this task in the registered Project "My First Demo". It is the My First Demo project under `workspace/`. First confirm its `projectId`, read Project Context, and then plan. Do not guess or construct `workspacePath`.
+
+Dashboard-created managed Projects are direct children of this repository's `workspace/` directory. Machine-local Projects registered through `.agents/projects.local.json` must also use repository-relative paths inside `workspace/`; arbitrary absolute paths and paths outside the repository are rejected. The checked-in release Registry may define trusted system Projects such as the Supervisor repository itself, but those definitions are versioned configuration—not paths invented from a chat request. Do not ask ChatGPT to scan or operate on an unregistered directory outside `workspace/`; register an existing project through the supported local Registry first.
 
 1. Start `start.ps1`, open the printed Dashboard URL, and choose **New Project**. Create `My First Demo`. Supervisor creates a managed directory directly under `workspace/`; it does not import or scan arbitrary directories.
 2. Start `tunnel-client`, confirm `.\scripts\start-openai-tunnel.ps1 -ReadyOnly` succeeds, refresh the ChatGPT app, and open a new conversation with that app enabled.
@@ -421,5 +431,24 @@ Existing policy, Resource Profiles, and Workflow Definitions are preserved unles
 ## Project origin
 
 This project began as a personal experiment: use ChatGPT as the high-level thinking and interaction surface while a lower-cost Claude Code-compatible worker performs bounded local work. The hard part turned out not to be “more Agent intelligence”, but durable tasks, explicit approval, evidence-based auditing, resource control, and a workflow a real person can understand. Supervisor Beta is the next step toward that personal Codex-like system.
+
+## Author's note
+
+<details>
+<summary>A very personal note on why this project exists</summary>
+
+This started as a holiday vibe-coding project because I did not want my Codex allowance to go to waste. My contradictory complaint was that the allowance never felt sufficient, while buying credits or using APIs felt expensive and inconvenient. I still wanted a GPT model to act as the agent's decision-making center, so I started eyeing ChatGPT Web as the main interface.
+
+The original idea was to let a web GPT break down tasks, design Worker prompts, review requirements, and inspect quality, then use MCP to send execution work to Claude Code backed by lower-cost domestic models. My own engineering level was limited, so apart from occasional back-seat directing, I let Codex do most of the implementation.
+
+It turned out to be harder than expected. A web conversation cannot keep running indefinitely, interruptions are common, and Tunnel configuration adds friction. I still could not let go of what I thought was a brilliant idea, so I kept going until this Demo existed. The finished system does reduce some convenience and capability on both sides, which perhaps explains why this direction is uncommon.
+
+When I was discouraged, GPT comforted me by calling it "an AI Agent infrastructure experiment clearly beyond an ordinary personal project." Its talent for flattering the operator was impressive enough that I decided to publish the project anyway. This is my first serious GitHub project, so suggestions, experiments, bug reports, and a small star from interested visitors would genuinely mean a great deal to me.
+
+The full original Chinese note is available in [README.zh-CN.md](README.zh-CN.md#作者的话).
+
+</details>
+
+## Contributing and license
 
 Contributions are welcome when they preserve the supervision and safety boundaries. Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). Licensed under the [MIT License](LICENSE).

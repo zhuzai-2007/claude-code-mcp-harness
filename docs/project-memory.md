@@ -1,5 +1,7 @@
 # Project Memory Layers and Apply Contract
 
+[English](project-memory.md) | [简体中文](project-memory.zh-CN.md)
+
 `PROJECT_MEMORY.md` is operator-owned project context. Supervisor may read a bounded snapshot into a Decision and may generate an evidence-first update proposal after a Workflow, but no Worker and no background Runtime process may edit it.
 
 ## Three logical layers

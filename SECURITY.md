@@ -1,5 +1,7 @@
 # Security Policy
 
+[English](SECURITY.md) | [简体中文](SECURITY.zh-CN.md)
+
 ## Supported versions
 
 The current Beta branch receives best-effort security fixes. This project is a supervised local development runtime, not a production security boundary or operating-system sandbox.

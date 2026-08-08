@@ -22,7 +22,9 @@ Supervisor 是一个**为编码 Agent 提供审批、审计、项目连续性和
 
 要求：Windows PowerShell、Node.js 20 或更高版本、已配置 Provider 的 Claude Code CLI，以及能够使用所需 custom MCP action 的 ChatGPT 账户或工作区。在本发布候选版本编写时，OpenAI 官方文档将完整 MCP 写操作列为受支持 Business 与 Enterprise/Edu 工作区的能力；请在安装前通过下方指南确认最新套餐和管理员权限要求。
 
-如果目前只有 Git 和 Claude Code，请从 [Windows 从零开始指南](docs/getting-started-from-zero.md) 开始。ChatGPT 套餐、工作区、custom MCP 和写操作的可用性由 OpenAI 独立提供并可能变化。
+如果目前只有 Git 和 Claude Code，请从 [Windows 从零开始指南](docs/getting-started-from-zero.zh-CN.md) 开始。ChatGPT 套餐、工作区、custom MCP 和写操作的可用性由 OpenAI 独立提供并可能变化。
+
+> **项目位置：** Supervisor v1.10 以注册 Project 为边界。通过 Dashboard 创建的受管 Project 位于本仓库的 `workspace/` 下。向 ChatGPT 提需求时，请明确告诉它目标 Project；ChatGPT 应先通过 Project discovery 解析为已注册的 `projectId`，而不是自行猜测本地路径或构造 `workspacePath`。
 
 1. **安装依赖。** 克隆仓库，在仓库根目录打开 PowerShell：
 
@@ -46,13 +48,13 @@ Supervisor 是一个**为编码 Agent 提供审批、审计、项目连续性和
    .\scripts\start-openai-tunnel.ps1
    ```
 
-   某些命令行网络环境需要设置 `HTTP_PROXY` 与 `HTTPS_PROXY`；参见[网络与代理配置](#网络与代理配置)。不要提交 Tunnel Profile、API Key、代理地址或公网端点。
+   某些命令行网络环境需要设置 `HTTP_PROXY` 与 `HTTPS_PROXY`；参见 [Secure MCP Tunnel 代理设置](docs/secure-mcp-tunnel.zh-CN.md#初始化并运行-tunnel-client)。不要提交 Tunnel Profile、API Key、代理地址或公网端点。
 
-4. **连接 ChatGPT。** 在 ChatGPT Web 中把 Tunnel 端点添加为 MCP 连接。要求 ChatGPT Supervisor 在创建任务前调用 `cc_list_projects`、`cc_get_project_continuity` 和 `cc_list_workflow_definitions`。
+4. **连接 ChatGPT。** 在 ChatGPT Web 中把 Tunnel 端点添加为 MCP 连接。要求 ChatGPT Supervisor 在创建任务前调用 `cc_list_projects`、`cc_get_project_context`、`cc_get_project_continuity` 和 `cc_list_workflow_definitions`。
 
-5. **运行第一个任务。** 对已注册的 Demo Project，只输入：
+5. **运行第一个任务。** 在请求中明确目标注册 Project：
 
-   > 给演示任务看板增加 CSV 导出功能。
+   > 请在已注册的 Project“Release Beta Todo Demo”中为任务看板增加 CSV 导出功能。规划前先解析它的准确 `projectId`。
 
    预期流程：
 
@@ -61,7 +63,7 @@ Supervisor 是一个**为编码 Agent 提供审批、审计、项目连续性和
    -> Harness Audit -> Claude Reviewer -> ChatGPT Supervisor Review
    ```
 
-Dashboard 是查看状态、证据和执行审批的控制台，不替代 ChatGPT 的负责人判断。完整的新会话步骤与非自动发布验收见 [ChatGPT Web 使用指南](docs/gpt-web-usage.md)。
+Dashboard 是查看状态、证据和执行审批的控制台，不替代 ChatGPT 的负责人判断。完整的新会话步骤与非自动发布验收见 [ChatGPT Web 使用指南](docs/gpt-web-usage.zh-CN.md)。
 
 ## 首次使用完整闭环
 
@@ -111,6 +113,14 @@ start.ps1 -> start-openai-tunnel.ps1 -> Tunnel ready
 工具定义发生变化后必须刷新；本地重启后如果工具不可见或调用异常，也应首先刷新。如果所在 Workspace 不允许更新已经发布的 App，请按照 Workspace 策略重新创建并发布。
 
 ### 3. 完整跑一次 Demo
+
+用户告诉 ChatGPT 的 Project 名称或目录只是定位线索，不是可直接执行的路径。ChatGPT Supervisor 必须先调用 `cc_list_projects`，解析出唯一且准确的已注册 `projectId`，再调用 `cc_get_project_context`、`cc_get_project_continuity` 和 `cc_list_workflow_definitions`，然后才能创建 Workflow。最终由 Runtime Registry 将 `projectId` 映射为 `workspacePath`，而不是由 GPT 决定路径。
+
+请求中应明确指出已注册 Project。例如：
+
+> 我要在已注册的 Project“My First Demo”中完成这个任务。它是 `workspace/` 下的 My First Demo 项目。请先确认对应 `projectId`、读取 Project Context，再规划，不要自行猜测或构造 `workspacePath`。
+
+Dashboard 创建的受管 Project 必须是本仓库 `workspace/` 的直接子目录。通过 `.agents/projects.local.json` 注册的本地 Project 也必须使用仓库相对路径，并位于 `workspace/` 内；任意绝对路径和仓库外路径都会被拒绝。受版本控制的 release Registry 可以定义 Supervisor 仓库本身等可信 system Project，但这是发布配置，不是 GPT 根据聊天内容临时发明的路径。不要要求 ChatGPT 扫描或操作 `workspace/` 之外的未注册目录；已有项目需要先按受支持的 local Registry 方式注册。
 
 1. 运行 `start.ps1`，打开它打印的 Dashboard 地址，选择 **New Project**，创建 `My First Demo`。Supervisor 只会在 `workspace/` 下创建受管目录，不会扫描或导入任意目录。
 2. 启动 `tunnel-client`，确认 `.\scripts\start-openai-tunnel.ps1 -ReadyOnly` 成功，刷新 ChatGPT App，并用已启用该 App 的新会话开始。
@@ -170,7 +180,7 @@ Decision 会先写入 `runtime-data/supervisor-decisions/`。只有目标项目�
 Supervisor Decision -> Project Context -> Workflow Planner -> Workflow Runtime -> Task Runtime
 ```
 
-GPT 的行为顺序是：理解真实目标，判断是否需要 Worker，查询并确认注册项目，读取 Supervisor Context，制定技术方向和验证计划，查询合法 Workflow，最后创建 Workflow。解释类请求使用 `respond_directly`，项目分析使用 `analysis_only`，代码修改使用 `software_change`。本地会拒绝 Intent/Workflow 不一致和让 Worker 猜目录的请求。Decision Layer 不直接创建 Task，不生成审批，也不能绕过既有安全边界。详细设计见 [Supervisor Brain](docs/supervisor-brain.md)。
+GPT 的行为顺序是：理解真实目标，判断是否需要 Worker，查询并确认注册项目，读取 Supervisor Context，制定技术方向和验证计划，查询合法 Workflow，最后创建 Workflow。解释类请求使用 `respond_directly`，项目分析使用 `analysis_only`，代码修改使用 `software_change`。本地会拒绝 Intent/Workflow 不一致和让 Worker 猜目录的请求。Decision Layer 不直接创建 Task，不生成审批，也不能绕过既有安全边界。详细设计见 [Supervisor Brain](docs/supervisor-brain.zh-CN.md)。
 
 ## Windows 快速开始
 
@@ -222,7 +232,7 @@ Workflow 失败后，Dashboard 会展示失败阶段，并区分 provider 连接
 
 v0.9 使用隔离项目 `workspace/autonomous-beta-demo` 和真实 Provider 完成验收。只输入自然语言搜索需求后，系统依次完成 Decision → Planner → 显式受限测试审批 → Coder → Reviewer；随后使用 Microsoft Edge 独立验证关键词搜索、状态组合筛选、计数和空状态。验收发现 360px 小屏工具栏真实溢出，又通过第二个完整审计 Workflow 做最小修复，并在 360px 和 1280px 下重新验证。
 
-验收驱动只在检查 Planner 结果后写入具名审批元数据；产品没有自动批准，也没有移除审批边界。详细证据见 [v0.9 自主验收记录](docs/v0.9-autonomous-validation.md)。可重复的无依赖契约测试：
+验收驱动只在检查 Planner 结果后写入具名审批元数据；产品没有自动批准，也没有移除审批边界。详细证据见 [v0.9 自主验收记录（英文，历史资料）](docs/v0.9-autonomous-validation.md)。可重复的无依赖契约测试：
 
 ```powershell
 node .\workspace\autonomous-beta-demo\demo.test.mjs
@@ -230,11 +240,11 @@ node .\workspace\autonomous-beta-demo\demo.test.mjs
 
 ## v1.0-beta 发布准备
 
-v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Decision、Workflow、Task、审批、资源和审计边界不变，只收紧首次使用说明、版本检查、发布文件可见性和可重复的 Todo 验收。详见 [v1.0-beta 发布审计](docs/v1.0-beta-release-audit.md)。
+v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Decision、Workflow、Task、审批、资源和审计边界不变，只收紧首次使用说明、版本检查、发布文件可见性和可重复的 Todo 验收。详见 [v1.0-beta 发布审计（英文，历史资料）](docs/v1.0-beta-release-audit.md)。
 
 ## v1.10 Beta 发布候选
 
-v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [发布候选审计](docs/release/v1.10.0-beta.1.md)、[Changelog](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.md#end-to-end-release-validation)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
+v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [发布候选审计（英文）](docs/release/v1.10.0-beta.1.md)、[Changelog（英文）](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.zh-CN.md#端到端发布验收)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
 
 ## 架构
 
@@ -278,7 +288,7 @@ v1.4 增加只读 `cc_get_supervisor_review_package` 投影：它持久化原始
 
 v1.5 在 completed/failed Workflow 页面增加紧凑的 **在 ChatGPT 中审查** 交接入口。Dashboard 只提供 Workflow/Project id、现有 Review Package 工具调用和建议提示词，不调用 GPT API。需要 GPT 判断的字段在明确提交 Review Result 前保持为空。
 
-v1.6 增加 Project Intelligence 层。`cc_record_supervisor_review_result` 可以保存经过明确确认的 ChatGPT Supervisor 结论，但不改变 Workflow 状态。待处理的证据型 Proposal 只能通过 `cc_apply_memory_update_proposal` 或本地 Dashboard，在具名确认后应用；Runtime 仅追加到 `Recent Evolution`，保留原 Memory，并记录前后 digest，整个过程不运行 Worker。详见[架构说明](docs/ARCHITECTURE.md)和 [Project Memory 分层](docs/project-memory.md)。
+v1.6 增加 Project Intelligence 层。`cc_record_supervisor_review_result` 可以保存经过明确确认的 ChatGPT Supervisor 结论，但不改变 Workflow 状态。待处理的证据型 Proposal 只能通过 `cc_apply_memory_update_proposal` 或本地 Dashboard，在具名确认后应用；Runtime 仅追加到 `Recent Evolution`，保留原 Memory，并记录前后 digest，整个过程不运行 Worker。详见[架构说明（英文）](docs/ARCHITECTURE.md)和 [Project Memory 分层](docs/project-memory.zh-CN.md)。
 
 v1.7 增加 Project Continuity。Dashboard 默认进入 Project Overview，按页查看 Brief、Memory、Sessions、近期 Workflows 和开放问题；Artifact Center 只读展示已有 Plan、Approval、Execution Evidence、Changes、Review 和 Memory Impact。新增 MCP 仅有只读的 `cc_get_project_continuity`，不会返回庞大的事件历史。Project Brief 只有在明确确认并保存 GPT Supervisor Review 后才会包含建议，不会从 Worker 自述或未确认 Session 上下文伪造判断。
 
@@ -319,7 +329,7 @@ v1.7 增加 Project Continuity。Dashboard 默认进入 Project Overview，按�
 - 未审批就启动可写阶段；
 - 接受未通过严格审计契约的结果。
 
-这些措施不是进程级隔离。详见 [SECURITY.md](SECURITY.md)。
+这些措施不是进程级隔离。详见 [SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
 
 ## 配置与密钥
 
@@ -341,7 +351,7 @@ v1.7 增加 Project Continuity。Dashboard 默认进入 Project Overview，按�
 - `.agents/local.config.json`：旧版本地设置；
 - runtime 数据、Worker 产物、Tunnel profile 和日志。
 
-Provider key、`CONTROL_PLANE_API_KEY`、代理凭据、Tunnel ID 和 runtime token 只能保存在环境变量或操作系统密钥设施中。不要写入 JSON 示例或提交仓库。详见 [配置与密钥](docs/configuration.md)。
+Provider key、`CONTROL_PLANE_API_KEY`、代理凭据、Tunnel ID 和 runtime token 只能保存在环境变量或操作系统密钥设施中。不要写入 JSON 示例或提交仓库。详见 [配置与密钥](docs/configuration.zh-CN.md)。
 
 ## ChatGPT Web 与 Secure MCP Tunnel
 
@@ -360,7 +370,7 @@ $env:HTTP_PROXY="http://127.0.0.1:<proxy-port>"
 $env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
 ```
 
-浏览器能访问 ChatGPT，不代表 `tunnel-client` 或 Claude Code 能访问各自的外部服务。不要提交真实代理地址或凭据。详见 [Secure MCP Tunnel](docs/secure-mcp-tunnel.md)。
+浏览器能访问 ChatGPT，不代表 `tunnel-client` 或 Claude Code 能访问各自的外部服务。不要提交真实代理地址或凭据。详见 [Secure MCP Tunnel](docs/secure-mcp-tunnel.zh-CN.md)。
 
 ## 验证
 
@@ -384,7 +394,7 @@ $env:HTTPS_PROXY="http://127.0.0.1:<proxy-port>"
 
 只有在确认模型费用和项目边界后，才应执行真实 Worker 测试。
 
-一次脱敏后的 Planner → 审批 → Coder → Reviewer 真实成功记录见 [Beta dogfood](docs/beta-dogfood.md)。
+一次脱敏后的 Planner → 审批 → Coder → Reviewer 真实成功记录见 [Beta dogfood（英文，历史验收记录）](docs/beta-dogfood.md)。
 
 Runtime retention 默认在启动时执行一次：保留 30 天内最多 200 个终态 Workflow、200 个终态独立 Task 和 500 个未关联 Decision；对应历史过期时一并清理关联 Attempt 产物，活动任务不会被选中。可先预览，再显式执行：
 
@@ -420,4 +430,23 @@ node .\scripts\cleanup-runtime.mjs --apply
 
 这个项目最初是一个个人实验：让 ChatGPT 负责高层思考和交互，让成本更低、兼容 Claude Code 的 Worker 完成本地执行。真正困难的部分并不是增加更多“Agent 智能”，而是持久化任务、明确审批、基于证据的审计、资源控制，以及让普通用户能够看懂并控制整个流程。Supervisor Beta 是向个人 Codex-like 系统继续迈出的一步。
 
-欢迎提交保持监督和安全边界的小范围改进。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。项目使用 [MIT License](LICENSE)。
+## 作者的话
+
+<details>
+<summary>一个很不严肃但很真实的项目缘起</summary>
+
+这个项目是我假期想着 Codex 的额度不要浪费，一时兴起 vibe 的小项目。我当时想的是 Codex 额度总是不够用（好矛盾 hhhh），充积分或者用 API 对我来说又贵又麻烦，但我又想用 GPT 的模型作为 Agent 的大脑，于是我就开始觊觎 GPT 网页版。
+
+我最初的想法是让网页版 GPT 作为主要的核心，负责拆解任务、设计提示词、审核要求、查验质量，通过 MCP 调用接入国产模型的 Claude Code 作为 subagent 跑腿。但由于我水平实在有限，所以除了偶尔的指手画脚、瞎指挥外，就让 Codex 全权代劳了。
+
+做的时候发现比想象的更难：网页版没办法长期执行任务，而且很容易中断；配置各种 Tunnel 什么的感觉也很麻烦。但我实在放不下这个自认为绝妙的点子，因此坚持做了这么一个 Demo 出来。做完确实觉得这么一搞，网页和 Agent 的能力都大打折扣，怪不得这个方向没什么人做。
+
+心灰意懒之际，GPT 安慰我说这是个“明显超过普通个人项目的 AI Agent 基础设施实验”，其溜须拍马之能深得朕心。于是决定还是腆着脸开源出来给大家图一乐。
+
+但毕竟是我正儿八经放在 GitHub 上的第一个项目，爱子心切，还是欢迎感兴趣的看官配置使用，提出宝贵的意见；也恳请路过的父老乡亲高抬贵手点点小 star，作为对我最宝贵的鼓励。
+
+</details>
+
+## 参与协作与许可证
+
+欢迎提交保持监督和安全边界的小范围改进。安全问题请按 [SECURITY.zh-CN.md](SECURITY.zh-CN.md) 私下报告。项目使用 [MIT License](LICENSE)。

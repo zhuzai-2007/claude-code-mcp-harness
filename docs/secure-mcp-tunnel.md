@@ -1,5 +1,7 @@
 # Connect ChatGPT through OpenAI Secure MCP Tunnel
 
+[English](secure-mcp-tunnel.md) | [简体中文](secure-mcp-tunnel.zh-CN.md)
+
 Use OpenAI Secure MCP Tunnel as the default remote path for this project. The MCP bridge remains bound to `127.0.0.1`; `tunnel-client` creates an outbound HTTPS connection to OpenAI and forwards MCP requests back to the local bridge. This avoids publishing the write-capable MCP endpoint on the internet.
 
 ## What the Tunnel exposes
@@ -108,7 +110,7 @@ In ChatGPT developer mode, create an app and choose **Tunnel** as the connection
 - `cc_approve_workflow`
 - `cc_get_supervisor_review_package`
 
-Start with `cc_ping`, then ask ChatGPT Supervisor to discover Projects, read the selected Project context, discover legal Workflow Definitions, and create a Project-bound Workflow. The Planner remains read-only. A write-capable stage must remain at the human checkpoint until the user explicitly approves it.
+Start with `cc_ping`, then name the target registered Project and ask ChatGPT Supervisor to discover Projects, resolve the exact `projectId`, read its Project Context and Continuity, discover legal Workflow Definitions, and create a Project-bound Workflow. A Project name or `workspace/` directory is only a discovery hint; ChatGPT must not construct `workspacePath` from an absolute or guessed path. The Planner remains read-only. A write-capable stage must remain at the human checkpoint until the user explicitly approves it.
 
 The standalone `cc_plan_task`, `cc_review_task`, and `cc_run_approved_task` tools remain available for compatibility, but they are not the recommended first-run Supervisor workflow. `cc_run_approved_task` does not approve or advance a Workflow.
 
