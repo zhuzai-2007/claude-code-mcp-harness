@@ -106,9 +106,11 @@ $continuitySource = Get-Content -LiteralPath (Join-Path $repoRoot "runtime\proje
 $continuityMarkersPresent = $continuitySource.Contains('buildProjectBrief') -and $continuitySource.Contains('getArtifactCenter') -and $continuitySource.Contains('recommendedNextSteps') -and $dashboardSource.Contains('/continuity') -and $dashboardSource.Contains('/artifacts') -and $architectureSource.Contains('Project Continuity Layer')
 Add-Check "Project Continuity contracts" $continuityMarkersPresent "Evidence-derived Project Briefs, read-only Artifact Center, Dashboard project view, and architecture documentation are present."
 
-$releaseStatus = Get-Content -LiteralPath (Join-Path $repoRoot ".agents\release-status.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+$releaseStatusRaw = Get-Content -LiteralPath (Join-Path $repoRoot ".agents\release-status.json") -Raw -Encoding UTF8
+$releaseStatus = $releaseStatusRaw | ConvertFrom-Json
 $gptWebUsage = Get-Content -LiteralPath (Join-Path $repoRoot "docs\gpt-web-usage.md") -Raw -Encoding UTF8
-$healthMarkersPresent = $continuitySource.Contains('health') -and $dashboardSource.Contains('project-health-summary') -and [string]$releaseStatus.version -eq [string]$package.version -and [string]$releaseStatus.readiness -eq "ready_for_beta_release" -and [string]$releaseStatus.lastGptWebDogfood -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$' -and $gptWebUsage.Contains('new ChatGPT Web conversation') -and $gptWebUsage.Contains('cc_get_supervisor_review_package')
+$dogfoodTimestampPersisted = $releaseStatusRaw -match '"lastGptWebDogfood"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z"'
+$healthMarkersPresent = $continuitySource.Contains('health') -and $dashboardSource.Contains('project-health-summary') -and [string]$releaseStatus.version -eq [string]$package.version -and [string]$releaseStatus.readiness -eq "ready_for_beta_release" -and $dogfoodTimestampPersisted -and $gptWebUsage.Contains('new ChatGPT Web conversation') -and $gptWebUsage.Contains('cc_get_supervisor_review_package')
 Add-Check "v1.10 stabilization contracts" $healthMarkersPresent "Deterministic Project Health, release metadata, and the fresh-session GPT Web validation guide are present."
 
 $demoSource = Get-Content -LiteralPath (Join-Path $repoRoot "workspace\autonomous-beta-demo\app.js") -Raw -Encoding UTF8
