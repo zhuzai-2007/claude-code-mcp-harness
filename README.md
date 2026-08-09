@@ -246,7 +246,7 @@ v1.0-beta is a release-convergence milestone, not a Runtime redesign. It keeps t
 
 ## v1.10 Beta release candidate
 
-v1.10 freezes the Project-first Dashboard, layered Project Registry, Planner Resource Selection, Project Context Snapshot, Dashboard Settings, automatic test discovery, and clean onboarding validation as a public-Beta candidate. It does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [release candidate audit](docs/release/v1.10.0-beta.1.md), [Changelog](CHANGELOG.md), and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The candidate remains `pending_gpt_web_validation` until that manual fresh-session check is recorded.
+v1.10 freezes the Project-first Dashboard, layered Project Registry, Planner Resource Selection, Project Context Snapshot, Dashboard Settings, automatic test discovery, and clean onboarding validation as a public-Beta candidate. It does not add Runtime AI judgment or change the Task/Workflow, Harness, audit, Resource Profile, or approval boundaries. See the [release candidate audit](docs/release/v1.10.0-beta.1.md), [Changelog](CHANGELOG.md), and [ChatGPT Web release validation](docs/gpt-web-usage.md#end-to-end-release-validation). The manual fresh-session check is recorded and the candidate is `ready_for_beta_release`.
 
 ## Architecture
 

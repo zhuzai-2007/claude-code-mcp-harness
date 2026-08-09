@@ -244,7 +244,7 @@ v1.0-beta 是发布收敛版本，不是 Runtime 重构。它保持 v0.9 的 Dec
 
 ## v1.10 Beta 发布候选
 
-v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [发布候选审计（英文）](docs/release/v1.10.0-beta.1.md)、[Changelog（英文）](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.zh-CN.md#端到端发布验收)。在完成新会话人工验证前，候选状态保持为 `pending_gpt_web_validation`。
+v1.10 将 Project-first Dashboard、分层 Project Registry、Planner Resource Selection、Project Context Snapshot、Dashboard Settings、自动测试发现与 clean onboarding 验证冻结为公开 Beta 候选。不引入 Runtime AI 判断，也不改变 Task/Workflow、Harness、审计、Resource Profile 或审批边界。参见 [发布候选审计（英文）](docs/release/v1.10.0-beta.1.md)、[Changelog（英文）](CHANGELOG.md) 与 [ChatGPT Web 发布验收](docs/gpt-web-usage.zh-CN.md#端到端发布验收)。新会话人工验证已经记录，候选状态为 `ready_for_beta_release`。
 
 ## 架构
 

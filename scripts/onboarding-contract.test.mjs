@@ -28,7 +28,8 @@ const packageJson = JSON.parse(packageText);
 const releaseStatus = JSON.parse(releaseText);
 assert.equal(packageJson.version, "1.10.0-beta.1");
 assert.equal(releaseStatus.version, packageJson.version);
-assert.equal(releaseStatus.readiness, "pending_gpt_web_validation");
+assert.equal(releaseStatus.readiness, "ready_for_beta_release");
+assert.match(releaseStatus.lastGptWebDogfood, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 assert(installSource.includes("Supervisor v1.10 Beta"));
 assert(startSource.includes("Supervisor v1.10 Beta"));
 

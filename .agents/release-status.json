@@ -4,14 +4,14 @@
   "version": "1.10.0-beta.1",
   "channel": "beta",
   "baseline": "release_candidate",
-  "readiness": "pending_gpt_web_validation",
-  "lastGptWebDogfood": null,
+  "readiness": "ready_for_beta_release",
+  "lastGptWebDogfood": "2026-08-08T13:43:08.811Z",
   "attention": [
-    "The v1.10 release candidate still requires the documented GPT Web end-to-end validation.",
-    "No v1.10 GPT Web dogfood result has been recorded."
+    "Supervisor Review completed in ChatGPT Web; explicit Review Result persistence was not exercised.",
+    "Memory application occurred before the final GPT review during dogfood; this is not the recommended production sequence."
   ],
   "nextRequiredChecks": [
-    "Run the documented GPT Web end-to-end validation from a new ChatGPT session.",
-    "Record the Supervisor Review outcome before declaring the public Beta ready."
+    "Exercise explicit Supervisor Review Result persistence in a future validation run.",
+    "Use the recommended Review -> save review -> confirm Memory apply sequence in future workflows."
   ]
 }
